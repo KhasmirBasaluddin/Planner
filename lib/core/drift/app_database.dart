@@ -1,0 +1,268 @@
+﻿import 'dart:ui';
+
+import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
+
+import '../app_paths.dart';
+import '../../models/planner_models.dart' as model;
+import '../../shared/utils/planner_colors.dart';
+
+part 'app_database.g.dart';
+
+@DataClassName('BoardRow')
+class Boards extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get name => text()();
+  IntColumn get color => integer()();
+  IntColumn get position => integer()();
+}
+
+@DataClassName('TaskGroupRow')
+class TaskGroups extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get boardId => integer().references(Boards, #id)();
+  TextColumn get name => text()();
+  IntColumn get color => integer()();
+  IntColumn get position => integer()();
+}
+
+@DataClassName('PlannerTaskRow')
+class PlannerTasks extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  IntColumn get groupId => integer().references(TaskGroups, #id)();
+  TextColumn get title => text()();
+  TextColumn get owner => text()();
+  TextColumn get status => text()();
+  TextColumn get priority => text()();
+  TextColumn get dueDate => text()();
+  TextColumn get timeline => text()();
+  RealColumn get progress => real()();
+  IntColumn get position => integer()();
+}
+
+@DriftDatabase(tables: [Boards, TaskGroups, PlannerTasks])
+class AppDatabase extends _$AppDatabase {
+  AppDatabase() : super(_openConnection());
+
+  @override
+  int get schemaVersion => 1;
+
+  @override
+  MigrationStrategy get migration {
+    return MigrationStrategy(onCreate: (migrator) => migrator.createAll());
+  }
+
+  Future<List<model.Board>> loadBoards() async {
+    final boardRows = await (select(
+      boards,
+    )..orderBy([(row) => OrderingTerm.asc(row.position)])).get();
+    final groupRows = await (select(
+      taskGroups,
+    )..orderBy([(row) => OrderingTerm.asc(row.position)])).get();
+    final taskRows = await (select(
+      plannerTasks,
+    )..orderBy([(row) => OrderingTerm.asc(row.position)])).get();
+
+    return boardRows.map((boardRow) {
+      final groups = groupRows
+          .where((groupRow) => groupRow.boardId == boardRow.id)
+          .map((groupRow) {
+            final tasks = taskRows
+                .where((taskRow) => taskRow.groupId == groupRow.id)
+                .map(_taskFromRow)
+                .toList();
+
+            return model.TaskGroup(
+              id: groupRow.id,
+              boardId: groupRow.boardId,
+              name: groupRow.name,
+              color: Color(groupRow.color),
+              tasks: tasks,
+            );
+          })
+          .toList();
+
+      return model.Board(
+        id: boardRow.id,
+        name: boardRow.name,
+        color: Color(boardRow.color),
+        groups: groups,
+      );
+    }).toList();
+  }
+
+  Future<int> createBoard({required String name}) async {
+    final position = (await select(boards).get()).length;
+    return into(boards).insert(
+      BoardsCompanion.insert(
+        name: name.trim(),
+        color: plannerBlue.toARGB32(),
+        position: position,
+      ),
+    );
+  }
+
+  Future<void> updateBoardName({
+    required int boardId,
+    required String name,
+  }) async {
+    await (update(boards)..where((row) => row.id.equals(boardId))).write(
+      BoardsCompanion(name: Value(name.trim())),
+    );
+  }
+
+  Future<int> createGroup({required int boardId, required String name}) async {
+    final groupRows = await (select(
+      taskGroups,
+    )..where((row) => row.boardId.equals(boardId))).get();
+    return into(taskGroups).insert(
+      TaskGroupsCompanion.insert(
+        boardId: boardId,
+        name: name.trim(),
+        color: _groupColor(groupRows.length).toARGB32(),
+        position: groupRows.length,
+      ),
+    );
+  }
+
+  Future<void> updateGroupName({
+    required int groupId,
+    required String name,
+  }) async {
+    await (update(taskGroups)..where((row) => row.id.equals(groupId))).write(
+      TaskGroupsCompanion(name: Value(name.trim())),
+    );
+  }
+
+  Future<int> addTask({
+    required int groupId,
+    required String title,
+    required String owner,
+    required model.TaskStatus status,
+    required model.TaskPriority priority,
+    required String dueDate,
+    required String timeline,
+    required double progress,
+    required int position,
+  }) async {
+    return into(plannerTasks).insert(
+      PlannerTasksCompanion.insert(
+        groupId: groupId,
+        title: title.trim(),
+        owner: owner.trim(),
+        status: status.name,
+        priority: priority.name,
+        dueDate: dueDate.trim().isEmpty ? 'No date' : dueDate.trim(),
+        timeline: timeline.trim().isEmpty ? 'Unscheduled' : timeline.trim(),
+        progress: progress,
+        position: position,
+      ),
+    );
+  }
+
+  Future<void> updateTask({
+    required model.PlannerTask task,
+    required int groupId,
+    required String title,
+    required String owner,
+    required model.TaskStatus status,
+    required model.TaskPriority priority,
+    required String dueDate,
+    required String timeline,
+    required double progress,
+  }) async {
+    await (update(plannerTasks)..where((row) => row.id.equals(task.id))).write(
+      PlannerTasksCompanion(
+        groupId: Value(groupId),
+        title: Value(title.trim()),
+        owner: Value(owner.trim()),
+        status: Value(status.name),
+        priority: Value(priority.name),
+        dueDate: Value(dueDate.trim().isEmpty ? 'No date' : dueDate.trim()),
+        timeline: Value(
+          timeline.trim().isEmpty ? 'Unscheduled' : timeline.trim(),
+        ),
+        progress: Value(progress),
+      ),
+    );
+  }
+
+  Future<void> updateTaskStatus(
+    model.PlannerTask task,
+    model.TaskStatus status,
+  ) async {
+    final progress = status == model.TaskStatus.done
+        ? 1.0
+        : task.progress.clamp(0, 0.9).toDouble();
+    await (update(plannerTasks)..where((row) => row.id.equals(task.id))).write(
+      PlannerTasksCompanion(
+        status: Value(status.name),
+        progress: Value(progress),
+      ),
+    );
+  }
+
+  Future<void> deleteBoard(int boardId) async {
+    await transaction(() async {
+      final groupRows = await (select(
+        taskGroups,
+      )..where((row) => row.boardId.equals(boardId))).get();
+      final groupIds = groupRows.map((group) => group.id).toList();
+
+      for (final groupId in groupIds) {
+        await (delete(
+          plannerTasks,
+        )..where((row) => row.groupId.equals(groupId))).go();
+      }
+
+      await (delete(
+        taskGroups,
+      )..where((row) => row.boardId.equals(boardId))).go();
+      await (delete(boards)..where((row) => row.id.equals(boardId))).go();
+    });
+  }
+
+  Future<void> deleteGroup(int groupId) async {
+    await transaction(() async {
+      await (delete(
+        plannerTasks,
+      )..where((row) => row.groupId.equals(groupId))).go();
+      await (delete(taskGroups)..where((row) => row.id.equals(groupId))).go();
+    });
+  }
+
+  Future<void> deleteTask(int taskId) async {
+    await (delete(plannerTasks)..where((row) => row.id.equals(taskId))).go();
+  }
+
+  model.PlannerTask _taskFromRow(PlannerTaskRow row) {
+    return model.PlannerTask(
+      id: row.id,
+      groupId: row.groupId,
+      title: row.title,
+      owner: row.owner,
+      status: model.TaskStatus.fromName(row.status),
+      priority: model.TaskPriority.fromName(row.priority),
+      dueDate: row.dueDate,
+      timeline: row.timeline,
+      progress: row.progress,
+    );
+  }
+
+  Color _groupColor(int index) {
+    return switch (index % 4) {
+      0 => plannerBlue,
+      1 => plannerGreen,
+      2 => plannerPurple,
+      _ => plannerYellow,
+    };
+  }
+}
+
+LazyDatabase _openConnection() {
+  return LazyDatabase(() async {
+    final file = await databaseFile();
+    return NativeDatabase.createInBackground(file);
+  });
+}
+
