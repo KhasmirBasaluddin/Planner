@@ -7,11 +7,15 @@ class BoardToolbar extends StatelessWidget {
   const BoardToolbar({
     super.key,
     required this.mode,
+    required this.taskOrder,
     required this.onModeChanged,
+    required this.onTaskOrderChanged,
   });
 
   final ViewMode mode;
+  final TaskOrder taskOrder;
   final ValueChanged<ViewMode> onModeChanged;
+  final ValueChanged<TaskOrder> onTaskOrderChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -45,7 +49,7 @@ class BoardToolbar extends StatelessWidget {
           const Spacer(),
           const ToolButton(icon: Icons.filter_list_rounded, label: 'Filter'),
           const SizedBox(width: 8),
-          const ToolButton(icon: Icons.swap_vert_rounded, label: 'Sort'),
+          TaskOrderMenu(value: taskOrder, onChanged: onTaskOrderChanged),
           const SizedBox(width: 8),
           const ToolButton(icon: Icons.more_horiz_rounded, label: 'More'),
         ],
@@ -101,6 +105,79 @@ class ViewButton extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class TaskOrderMenu extends StatelessWidget {
+  const TaskOrderMenu({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final TaskOrder value;
+  final ValueChanged<TaskOrder> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<TaskOrder>(
+      tooltip: 'Sort tasks',
+      offset: const Offset(0, 40),
+      color: Colors.white,
+      surfaceTintColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      onSelected: onChanged,
+      itemBuilder: (context) => [
+        for (final order in TaskOrder.values)
+          PopupMenuItem(
+            value: order,
+            child: Row(
+              children: [
+                Icon(
+                  order == value ? Icons.check_rounded : Icons.sort_rounded,
+                  size: 18,
+                  color: order == value ? plannerBlue : plannerMuted,
+                ),
+                const SizedBox(width: 10),
+                Text(order.label),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        height: 38,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        decoration: BoxDecoration(
+          color: value == TaskOrder.manual
+              ? Colors.white
+              : const Color(0xFFEAF2FF),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: value == TaskOrder.manual
+                ? plannerBorder
+                : const Color(0xFFCFE0FF),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.swap_vert_rounded,
+              size: 17,
+              color: value == TaskOrder.manual ? plannerText : plannerBlue,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              value == TaskOrder.manual ? 'Sort' : value.label,
+              style: TextStyle(
+                color: value == TaskOrder.manual ? plannerText : plannerBlue,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
         ),
       ),
     );

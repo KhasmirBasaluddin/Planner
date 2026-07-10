@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../../core/drift/app_database.dart' show AppDatabase;
 import '../../models/planner_models.dart';
@@ -25,6 +25,7 @@ class _PlannerPageState extends State<PlannerPage> {
   int _selectedBoardIndex = 0;
   String _query = '';
   ViewMode _mode = ViewMode.table;
+  TaskOrder _taskOrder = TaskOrder.manual;
   bool _loading = true;
   String? _error;
 
@@ -40,25 +41,76 @@ class _PlannerPageState extends State<PlannerPage> {
     if (board == null) {
       return [];
     }
-    if (_query.trim().isEmpty) {
-      return board.groups;
-    }
 
-    final query = _query.toLowerCase();
+    final query = _query.trim().toLowerCase();
     return board.groups
-        .map(
-          (group) => TaskGroup(
+        .map((group) {
+          final tasks = query.isEmpty
+              ? group.tasks
+              : group.tasks
+                    .where((task) => task.title.toLowerCase().contains(query))
+                    .toList();
+
+          return TaskGroup(
             id: group.id,
             boardId: group.boardId,
             name: group.name,
             color: group.color,
-            tasks: group.tasks
-                .where((task) => task.title.toLowerCase().contains(query))
-                .toList(),
-          ),
-        )
-        .where((group) => group.tasks.isNotEmpty)
+            tasks: _orderedTasks(tasks),
+          );
+        })
+        .where((group) => query.isEmpty || group.tasks.isNotEmpty)
         .toList();
+  }
+
+  List<PlannerTask> _orderedTasks(List<PlannerTask> tasks) {
+    final ordered = List<PlannerTask>.from(tasks);
+    switch (_taskOrder) {
+      case TaskOrder.manual:
+        return ordered;
+      case TaskOrder.title:
+        ordered.sort(
+          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+        );
+      case TaskOrder.dueDate:
+        ordered.sort(_compareDueDate);
+      case TaskOrder.priority:
+        ordered.sort(
+          (a, b) =>
+              _priorityRank(a.priority).compareTo(_priorityRank(b.priority)),
+        );
+      case TaskOrder.status:
+        ordered.sort(
+          (a, b) => _statusRank(a.status).compareTo(_statusRank(b.status)),
+        );
+    }
+    return ordered;
+  }
+
+  int _compareDueDate(PlannerTask a, PlannerTask b) {
+    final aMissing = a.dueDate == 'No date';
+    final bMissing = b.dueDate == 'No date';
+    if (aMissing != bMissing) {
+      return aMissing ? 1 : -1;
+    }
+    return a.dueDate.toLowerCase().compareTo(b.dueDate.toLowerCase());
+  }
+
+  int _priorityRank(TaskPriority priority) {
+    return switch (priority) {
+      TaskPriority.high => 0,
+      TaskPriority.medium => 1,
+      TaskPriority.low => 2,
+    };
+  }
+
+  int _statusRank(TaskStatus status) {
+    return switch (status) {
+      TaskStatus.notStarted => 0,
+      TaskStatus.working => 1,
+      TaskStatus.stuck => 2,
+      TaskStatus.done => 3,
+    };
   }
 
   @override
@@ -100,17 +152,20 @@ class _PlannerPageState extends State<PlannerPage> {
   }
 
   Future<void> _createBoard() async {
-    final name = await showNameDialog(
+    final result = await showNameDialog(
       context: context,
       title: 'New board',
       label: 'Board name',
       initialValue: 'New board ${_boards.length + 1}',
     );
-    if (name == null) {
+    if (result == null) {
       return;
     }
 
-    final boardId = await widget.database.createBoard(name: name);
+    final boardId = await widget.database.createBoard(
+      name: result.name,
+      color: result.color,
+    );
     await _loadBoards();
     if (!mounted) {
       return;
@@ -122,17 +177,22 @@ class _PlannerPageState extends State<PlannerPage> {
   }
 
   Future<void> _renameBoard(Board board) async {
-    final name = await showNameDialog(
+    final result = await showNameDialog(
       context: context,
-      title: 'Rename board',
+      title: 'Edit board',
       label: 'Board name',
       initialValue: board.name,
+      initialColor: board.color,
     );
-    if (name == null) {
+    if (result == null) {
       return;
     }
 
-    await widget.database.updateBoardName(boardId: board.id, name: name);
+    await widget.database.updateBoardName(boardId: board.id, name: result.name);
+    await widget.database.updateBoardColor(
+      boardId: board.id,
+      color: result.color,
+    );
     await _loadBoards();
   }
 
@@ -157,32 +217,41 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    final name = await showNameDialog(
+    final result = await showNameDialog(
       context: context,
       title: 'New group',
       label: 'Group name',
       initialValue: 'New group ${board.groups.length + 1}',
     );
-    if (name == null) {
+    if (result == null) {
       return;
     }
 
-    await widget.database.createGroup(boardId: board.id, name: name);
+    await widget.database.createGroup(
+      boardId: board.id,
+      name: result.name,
+      color: result.color,
+    );
     await _loadBoards();
   }
 
   Future<void> _renameGroup(TaskGroup group) async {
-    final name = await showNameDialog(
+    final result = await showNameDialog(
       context: context,
-      title: 'Rename group',
+      title: 'Edit group',
       label: 'Group name',
       initialValue: group.name,
+      initialColor: group.color,
     );
-    if (name == null) {
+    if (result == null) {
       return;
     }
 
-    await widget.database.updateGroupName(groupId: group.id, name: name);
+    await widget.database.updateGroupName(groupId: group.id, name: result.name);
+    await widget.database.updateGroupColor(
+      groupId: group.id,
+      color: result.color,
+    );
     await _loadBoards();
   }
 
@@ -278,6 +347,72 @@ class _PlannerPageState extends State<PlannerPage> {
     await _loadBoards();
   }
 
+  Future<void> _changeProgress(PlannerTask task, double progress) async {
+    await widget.database.updateTaskProgress(task, progress);
+    await _loadBoards();
+  }
+
+  Future<void> _reorderTask(TaskGroup group, int oldIndex, int newIndex) async {
+    if (_taskOrder != TaskOrder.manual) {
+      return;
+    }
+
+    final board = _selectedBoard;
+    if (board == null) {
+      return;
+    }
+
+    final groupIndex = board.groups.indexWhere((item) => item.id == group.id);
+    if (groupIndex < 0) {
+      return;
+    }
+
+    final tasks = List<PlannerTask>.from(board.groups[groupIndex].tasks);
+    if (oldIndex < 0 ||
+        oldIndex >= tasks.length ||
+        newIndex < 0 ||
+        newIndex > tasks.length) {
+      return;
+    }
+
+    final adjustedNewIndex = newIndex > oldIndex ? newIndex - 1 : newIndex;
+    if (oldIndex == adjustedNewIndex) {
+      return;
+    }
+
+    final task = tasks.removeAt(oldIndex);
+    tasks.insert(adjustedNewIndex, task);
+
+    final updatedGroups = List<TaskGroup>.from(board.groups);
+    final currentGroup = updatedGroups[groupIndex];
+    updatedGroups[groupIndex] = TaskGroup(
+      id: currentGroup.id,
+      boardId: currentGroup.boardId,
+      name: currentGroup.name,
+      color: currentGroup.color,
+      tasks: tasks,
+    );
+
+    final boardIndex = _boards.indexWhere((item) => item.id == board.id);
+    if (boardIndex >= 0 && mounted) {
+      setState(() {
+        final updatedBoards = List<Board>.from(_boards);
+        updatedBoards[boardIndex] = Board(
+          id: board.id,
+          name: board.name,
+          color: board.color,
+          groups: updatedGroups,
+        );
+        _boards = updatedBoards;
+      });
+    }
+
+    await widget.database.updateTaskPositions(
+      group.id,
+      tasks.map((task) => task.id).toList(),
+    );
+  }
+
   void _toggleGroup(TaskGroup group) {
     setState(() {
       if (_collapsedGroupIds.contains(group.id)) {
@@ -325,6 +460,9 @@ class _PlannerPageState extends State<PlannerPage> {
                   query: _query,
                   onSearchChanged: (value) => setState(() => _query = value),
                   onModeChanged: (mode) => setState(() => _mode = mode),
+                  taskOrder: _taskOrder,
+                  onTaskOrderChanged: (order) =>
+                      setState(() => _taskOrder = order),
                   onCreateBoard: _createBoard,
                   onRenameBoard: _renameBoard,
                   onDeleteBoard: _deleteBoard,
@@ -336,6 +474,8 @@ class _PlannerPageState extends State<PlannerPage> {
                   onEditTask: _editTask,
                   onDeleteTask: _deleteTask,
                   onStatusChanged: _changeStatus,
+                  onProgressChanged: _changeProgress,
+                  onTaskReorder: _reorderTask,
                 ),
               ),
             ],
@@ -358,6 +498,8 @@ class _PlannerContent extends StatelessWidget {
     required this.query,
     required this.onSearchChanged,
     required this.onModeChanged,
+    required this.taskOrder,
+    required this.onTaskOrderChanged,
     required this.onCreateBoard,
     required this.onRenameBoard,
     required this.onDeleteBoard,
@@ -369,6 +511,8 @@ class _PlannerContent extends StatelessWidget {
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
+    required this.onProgressChanged,
+    required this.onTaskReorder,
   });
 
   final bool loading;
@@ -381,6 +525,8 @@ class _PlannerContent extends StatelessWidget {
   final String query;
   final ValueChanged<String> onSearchChanged;
   final ValueChanged<ViewMode> onModeChanged;
+  final TaskOrder taskOrder;
+  final ValueChanged<TaskOrder> onTaskOrderChanged;
   final VoidCallback onCreateBoard;
   final ValueChanged<Board> onRenameBoard;
   final ValueChanged<Board> onDeleteBoard;
@@ -393,6 +539,10 @@ class _PlannerContent extends StatelessWidget {
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
+  final Future<void> Function(PlannerTask task, double progress)
+  onProgressChanged;
+  final void Function(TaskGroup group, int oldIndex, int newIndex)?
+  onTaskReorder;
 
   @override
   Widget build(BuildContext context) {
@@ -420,7 +570,12 @@ class _PlannerContent extends StatelessWidget {
           onRenameBoard: () => onRenameBoard(board!),
           onDeleteBoard: () => onDeleteBoard(board!),
         ),
-        BoardToolbar(mode: mode, onModeChanged: onModeChanged),
+        BoardToolbar(
+          mode: mode,
+          taskOrder: taskOrder,
+          onModeChanged: onModeChanged,
+          onTaskOrderChanged: onTaskOrderChanged,
+        ),
         Expanded(
           child: AnimatedSwitcher(
             duration: const Duration(milliseconds: 240),
@@ -448,6 +603,10 @@ class _PlannerContent extends StatelessWidget {
                     onEditTask: onEditTask,
                     onDeleteTask: onDeleteTask,
                     onStatusChanged: onStatusChanged,
+                    onProgressChanged: onProgressChanged,
+                    onTaskReorder: taskOrder == TaskOrder.manual
+                        ? onTaskReorder
+                        : null,
                   )
                 : _PlaceholderView(key: ValueKey(mode), mode: mode),
           ),

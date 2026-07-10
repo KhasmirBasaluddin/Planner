@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
@@ -100,14 +100,14 @@ class _Brand extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          width: 36,
-          height: 36,
-          decoration: BoxDecoration(
-            color: plannerBlue,
-            borderRadius: BorderRadius.circular(8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.asset(
+            'assets/images/planner.png',
+            width: 36,
+            height: 36,
+            fit: BoxFit.cover,
           ),
-          child: const Icon(Icons.dashboard_rounded, color: Colors.white),
         ),
         if (!compact) ...[
           const SizedBox(width: 12),
@@ -311,7 +311,7 @@ class _BoardRowMenu extends StatelessWidget {
           value: _SidebarBoardAction.rename,
           child: _SidebarMenuLabel(
             icon: Icons.edit_outlined,
-            label: 'Rename board',
+            label: 'Edit board',
           ),
         ),
         PopupMenuItem(

@@ -95,3 +95,14 @@ enum TaskPriority {
 }
 
 enum ViewMode { table, kanban, calendar }
+
+enum TaskOrder {
+  manual('Manual'),
+  title('Title'),
+  dueDate('Due date'),
+  priority('Priority'),
+  status('Status');
+
+  const TaskOrder(this.label);
+  final String label;
+}

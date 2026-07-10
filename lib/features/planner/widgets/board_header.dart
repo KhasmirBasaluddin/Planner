@@ -284,7 +284,7 @@ class _BoardActionsMenu extends StatelessWidget {
           value: _BoardAction.rename,
           child: _MenuActionLabel(
             icon: Icons.edit_outlined,
-            label: 'Rename board',
+            label: 'Edit board',
           ),
         ),
         PopupMenuItem(

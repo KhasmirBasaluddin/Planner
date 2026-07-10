@@ -1,11 +1,10 @@
-﻿import 'dart:ui';
+import 'dart:ui';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 
 import '../app_paths.dart';
 import '../../models/planner_models.dart' as model;
-import '../../shared/utils/planner_colors.dart';
 
 part 'app_database.g.dart';
 
@@ -59,9 +58,13 @@ class AppDatabase extends _$AppDatabase {
     final groupRows = await (select(
       taskGroups,
     )..orderBy([(row) => OrderingTerm.asc(row.position)])).get();
-    final taskRows = await (select(
-      plannerTasks,
-    )..orderBy([(row) => OrderingTerm.asc(row.position)])).get();
+    final taskRows =
+        await (select(plannerTasks)..orderBy([
+              (row) => OrderingTerm.asc(row.groupId),
+              (row) => OrderingTerm.asc(row.position),
+              (row) => OrderingTerm.asc(row.id),
+            ]))
+            .get();
 
     return boardRows.map((boardRow) {
       final groups = groupRows
@@ -91,12 +94,12 @@ class AppDatabase extends _$AppDatabase {
     }).toList();
   }
 
-  Future<int> createBoard({required String name}) async {
+  Future<int> createBoard({required String name, required Color color}) async {
     final position = (await select(boards).get()).length;
     return into(boards).insert(
       BoardsCompanion.insert(
         name: name.trim(),
-        color: plannerBlue.toARGB32(),
+        color: color.toARGB32(),
         position: position,
       ),
     );
@@ -111,7 +114,20 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  Future<int> createGroup({required int boardId, required String name}) async {
+  Future<void> updateBoardColor({
+    required int boardId,
+    required Color color,
+  }) async {
+    await (update(boards)..where((row) => row.id.equals(boardId))).write(
+      BoardsCompanion(color: Value(color.toARGB32())),
+    );
+  }
+
+  Future<int> createGroup({
+    required int boardId,
+    required String name,
+    required Color color,
+  }) async {
     final groupRows = await (select(
       taskGroups,
     )..where((row) => row.boardId.equals(boardId))).get();
@@ -119,7 +135,7 @@ class AppDatabase extends _$AppDatabase {
       TaskGroupsCompanion.insert(
         boardId: boardId,
         name: name.trim(),
-        color: _groupColor(groupRows.length).toARGB32(),
+        color: color.toARGB32(),
         position: groupRows.length,
       ),
     );
@@ -131,6 +147,15 @@ class AppDatabase extends _$AppDatabase {
   }) async {
     await (update(taskGroups)..where((row) => row.id.equals(groupId))).write(
       TaskGroupsCompanion(name: Value(name.trim())),
+    );
+  }
+
+  Future<void> updateGroupColor({
+    required int groupId,
+    required Color color,
+  }) async {
+    await (update(taskGroups)..where((row) => row.id.equals(groupId))).write(
+      TaskGroupsCompanion(color: Value(color.toARGB32())),
     );
   }
 
@@ -191,15 +216,56 @@ class AppDatabase extends _$AppDatabase {
     model.PlannerTask task,
     model.TaskStatus status,
   ) async {
-    final progress = status == model.TaskStatus.done
-        ? 1.0
-        : task.progress.clamp(0, 0.9).toDouble();
+    var progress = task.progress.clamp(0, 0.9).toDouble();
+    if (status == model.TaskStatus.done) {
+      progress = 1.0;
+    } else if (status == model.TaskStatus.notStarted) {
+      progress = 0.0;
+    }
     await (update(plannerTasks)..where((row) => row.id.equals(task.id))).write(
       PlannerTasksCompanion(
         status: Value(status.name),
         progress: Value(progress),
       ),
     );
+  }
+
+  Future<void> updateTaskProgress(
+    model.PlannerTask task,
+    double progress,
+  ) async {
+    final normalizedProgress = progress.clamp(0, 1).toDouble();
+    var status = task.status;
+    if (normalizedProgress <= 0) {
+      status = model.TaskStatus.notStarted;
+    } else if (normalizedProgress >= 1) {
+      status = model.TaskStatus.done;
+    } else if (status == model.TaskStatus.done ||
+        status == model.TaskStatus.notStarted) {
+      status = model.TaskStatus.working;
+    }
+
+    await (update(plannerTasks)..where((row) => row.id.equals(task.id))).write(
+      PlannerTasksCompanion(
+        progress: Value(normalizedProgress),
+        status: Value(status.name),
+      ),
+    );
+  }
+
+  Future<void> updateTaskPositions(
+    int groupId,
+    List<int> orderedTaskIds,
+  ) async {
+    await transaction(() async {
+      for (var index = 0; index < orderedTaskIds.length; index++) {
+        final taskId = orderedTaskIds[index];
+        await (update(plannerTasks)..where(
+              (row) => row.id.equals(taskId) & row.groupId.equals(groupId),
+            ))
+            .write(PlannerTasksCompanion(position: Value(index)));
+      }
+    });
   }
 
   Future<void> deleteBoard(int boardId) async {
@@ -248,15 +314,6 @@ class AppDatabase extends _$AppDatabase {
       progress: row.progress,
     );
   }
-
-  Color _groupColor(int index) {
-    return switch (index % 4) {
-      0 => plannerBlue,
-      1 => plannerGreen,
-      2 => plannerPurple,
-      _ => plannerYellow,
-    };
-  }
 }
 
 LazyDatabase _openConnection() {
@@ -265,4 +322,3 @@ LazyDatabase _openConnection() {
     return NativeDatabase.createInBackground(file);
   });
 }
-
