@@ -754,6 +754,16 @@ class $PlannerTasksTable extends PlannerTasks
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
+  @override
+  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
+    'notes',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(''),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -766,6 +776,7 @@ class $PlannerTasksTable extends PlannerTasks
     timeline,
     progress,
     position,
+    notes,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -854,6 +865,12 @@ class $PlannerTasksTable extends PlannerTasks
     } else if (isInserting) {
       context.missing(_positionMeta);
     }
+    if (data.containsKey('notes')) {
+      context.handle(
+        _notesMeta,
+        notes.isAcceptableOrUnknown(data['notes']!, _notesMeta),
+      );
+    }
     return context;
   }
 
@@ -903,6 +920,10 @@ class $PlannerTasksTable extends PlannerTasks
         DriftSqlType.int,
         data['${effectivePrefix}position'],
       )!,
+      notes: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}notes'],
+      )!,
     );
   }
 
@@ -923,6 +944,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
   final String timeline;
   final double progress;
   final int position;
+  final String notes;
   const PlannerTaskRow({
     required this.id,
     required this.groupId,
@@ -934,6 +956,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
     required this.timeline,
     required this.progress,
     required this.position,
+    required this.notes,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -948,6 +971,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
     map['timeline'] = Variable<String>(timeline);
     map['progress'] = Variable<double>(progress);
     map['position'] = Variable<int>(position);
+    map['notes'] = Variable<String>(notes);
     return map;
   }
 
@@ -963,6 +987,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
       timeline: Value(timeline),
       progress: Value(progress),
       position: Value(position),
+      notes: Value(notes),
     );
   }
 
@@ -982,6 +1007,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
       timeline: serializer.fromJson<String>(json['timeline']),
       progress: serializer.fromJson<double>(json['progress']),
       position: serializer.fromJson<int>(json['position']),
+      notes: serializer.fromJson<String>(json['notes']),
     );
   }
   @override
@@ -998,6 +1024,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
       'timeline': serializer.toJson<String>(timeline),
       'progress': serializer.toJson<double>(progress),
       'position': serializer.toJson<int>(position),
+      'notes': serializer.toJson<String>(notes),
     };
   }
 
@@ -1012,6 +1039,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
     String? timeline,
     double? progress,
     int? position,
+    String? notes,
   }) => PlannerTaskRow(
     id: id ?? this.id,
     groupId: groupId ?? this.groupId,
@@ -1023,6 +1051,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
     timeline: timeline ?? this.timeline,
     progress: progress ?? this.progress,
     position: position ?? this.position,
+    notes: notes ?? this.notes,
   );
   PlannerTaskRow copyWithCompanion(PlannerTasksCompanion data) {
     return PlannerTaskRow(
@@ -1036,6 +1065,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
       timeline: data.timeline.present ? data.timeline.value : this.timeline,
       progress: data.progress.present ? data.progress.value : this.progress,
       position: data.position.present ? data.position.value : this.position,
+      notes: data.notes.present ? data.notes.value : this.notes,
     );
   }
 
@@ -1051,7 +1081,8 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
           ..write('dueDate: $dueDate, ')
           ..write('timeline: $timeline, ')
           ..write('progress: $progress, ')
-          ..write('position: $position')
+          ..write('position: $position, ')
+          ..write('notes: $notes')
           ..write(')'))
         .toString();
   }
@@ -1068,6 +1099,7 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
     timeline,
     progress,
     position,
+    notes,
   );
   @override
   bool operator ==(Object other) =>
@@ -1082,7 +1114,8 @@ class PlannerTaskRow extends DataClass implements Insertable<PlannerTaskRow> {
           other.dueDate == this.dueDate &&
           other.timeline == this.timeline &&
           other.progress == this.progress &&
-          other.position == this.position);
+          other.position == this.position &&
+          other.notes == this.notes);
 }
 
 class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
@@ -1096,6 +1129,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
   final Value<String> timeline;
   final Value<double> progress;
   final Value<int> position;
+  final Value<String> notes;
   const PlannerTasksCompanion({
     this.id = const Value.absent(),
     this.groupId = const Value.absent(),
@@ -1107,6 +1141,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
     this.timeline = const Value.absent(),
     this.progress = const Value.absent(),
     this.position = const Value.absent(),
+    this.notes = const Value.absent(),
   });
   PlannerTasksCompanion.insert({
     this.id = const Value.absent(),
@@ -1119,6 +1154,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
     required String timeline,
     required double progress,
     required int position,
+    this.notes = const Value.absent(),
   }) : groupId = Value(groupId),
        title = Value(title),
        owner = Value(owner),
@@ -1139,6 +1175,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
     Expression<String>? timeline,
     Expression<double>? progress,
     Expression<int>? position,
+    Expression<String>? notes,
   }) {
     return RawValuesInsertable({
       if (id != null) 'id': id,
@@ -1151,6 +1188,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
       if (timeline != null) 'timeline': timeline,
       if (progress != null) 'progress': progress,
       if (position != null) 'position': position,
+      if (notes != null) 'notes': notes,
     });
   }
 
@@ -1165,6 +1203,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
     Value<String>? timeline,
     Value<double>? progress,
     Value<int>? position,
+    Value<String>? notes,
   }) {
     return PlannerTasksCompanion(
       id: id ?? this.id,
@@ -1177,6 +1216,7 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
       timeline: timeline ?? this.timeline,
       progress: progress ?? this.progress,
       position: position ?? this.position,
+      notes: notes ?? this.notes,
     );
   }
 
@@ -1213,6 +1253,9 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
     if (position.present) {
       map['position'] = Variable<int>(position.value);
     }
+    if (notes.present) {
+      map['notes'] = Variable<String>(notes.value);
+    }
     return map;
   }
 
@@ -1228,7 +1271,8 @@ class PlannerTasksCompanion extends UpdateCompanion<PlannerTaskRow> {
           ..write('dueDate: $dueDate, ')
           ..write('timeline: $timeline, ')
           ..write('progress: $progress, ')
-          ..write('position: $position')
+          ..write('position: $position, ')
+          ..write('notes: $notes')
           ..write(')'))
         .toString();
   }
@@ -1932,6 +1976,7 @@ typedef $$PlannerTasksTableCreateCompanionBuilder =
       required String timeline,
       required double progress,
       required int position,
+      Value<String> notes,
     });
 typedef $$PlannerTasksTableUpdateCompanionBuilder =
     PlannerTasksCompanion Function({
@@ -1945,6 +1990,7 @@ typedef $$PlannerTasksTableUpdateCompanionBuilder =
       Value<String> timeline,
       Value<double> progress,
       Value<int> position,
+      Value<String> notes,
     });
 
 final class $$PlannerTasksTableReferences
@@ -2020,6 +2066,11 @@ class $$PlannerTasksTableFilterComposer
 
   ColumnFilters<int> get position => $composableBuilder(
     column: $table.position,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get notes => $composableBuilder(
+    column: $table.notes,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -2101,6 +2152,11 @@ class $$PlannerTasksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get notes => $composableBuilder(
+    column: $table.notes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$TaskGroupsTableOrderingComposer get groupId {
     final $$TaskGroupsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -2160,6 +2216,9 @@ class $$PlannerTasksTableAnnotationComposer
 
   GeneratedColumn<int> get position =>
       $composableBuilder(column: $table.position, builder: (column) => column);
+
+  GeneratedColumn<String> get notes =>
+      $composableBuilder(column: $table.notes, builder: (column) => column);
 
   $$TaskGroupsTableAnnotationComposer get groupId {
     final $$TaskGroupsTableAnnotationComposer composer = $composerBuilder(
@@ -2223,6 +2282,7 @@ class $$PlannerTasksTableTableManager
                 Value<String> timeline = const Value.absent(),
                 Value<double> progress = const Value.absent(),
                 Value<int> position = const Value.absent(),
+                Value<String> notes = const Value.absent(),
               }) => PlannerTasksCompanion(
                 id: id,
                 groupId: groupId,
@@ -2234,6 +2294,7 @@ class $$PlannerTasksTableTableManager
                 timeline: timeline,
                 progress: progress,
                 position: position,
+                notes: notes,
               ),
           createCompanionCallback:
               ({
@@ -2247,6 +2308,7 @@ class $$PlannerTasksTableTableManager
                 required String timeline,
                 required double progress,
                 required int position,
+                Value<String> notes = const Value.absent(),
               }) => PlannerTasksCompanion.insert(
                 id: id,
                 groupId: groupId,
@@ -2258,6 +2320,7 @@ class $$PlannerTasksTableTableManager
                 timeline: timeline,
                 progress: progress,
                 position: position,
+                notes: notes,
               ),
           withReferenceMapper: (p0) => p0
               .map(

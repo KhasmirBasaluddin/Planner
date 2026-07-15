@@ -48,6 +48,7 @@ class PlannerTask {
     required this.dueDate,
     required this.timeline,
     required this.progress,
+    this.notes = const [],
   });
 
   final int id;
@@ -59,6 +60,9 @@ class PlannerTask {
   final String dueDate;
   final String timeline;
   final double progress;
+
+  /// Multiple free-text notes attached to the task (newest last).
+  final List<String> notes;
 }
 
 enum TaskStatus {

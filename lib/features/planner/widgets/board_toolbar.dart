@@ -20,7 +20,7 @@ class BoardToolbar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 58,
+      height: 50,
       padding: const EdgeInsets.symmetric(horizontal: 28),
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -29,29 +29,25 @@ class BoardToolbar extends StatelessWidget {
       child: Row(
         children: [
           ViewButton(
-            icon: Icons.table_rows_rounded,
+            icon: Icons.table_rows_outlined,
             label: 'Table',
             selected: mode == ViewMode.table,
             onTap: () => onModeChanged(ViewMode.table),
           ),
           ViewButton(
-            icon: Icons.view_kanban_rounded,
+            icon: Icons.view_kanban_outlined,
             label: 'Kanban',
             selected: mode == ViewMode.kanban,
             onTap: () => onModeChanged(ViewMode.kanban),
           ),
           ViewButton(
-            icon: Icons.calendar_today_rounded,
+            icon: Icons.calendar_today_outlined,
             label: 'Calendar',
             selected: mode == ViewMode.calendar,
             onTap: () => onModeChanged(ViewMode.calendar),
           ),
           const Spacer(),
-          const ToolButton(icon: Icons.filter_list_rounded, label: 'Filter'),
-          const SizedBox(width: 8),
           TaskOrderMenu(value: taskOrder, onChanged: onTaskOrderChanged),
-          const SizedBox(width: 8),
-          const ToolButton(icon: Icons.more_horiz_rounded, label: 'More'),
         ],
       ),
     );
@@ -75,32 +71,29 @@ class ViewButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(right: 8),
+      padding: const EdgeInsets.only(right: 4),
       child: InkWell(
         onTap: onTap,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(6),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           curve: Curves.easeOutCubic,
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          height: 32,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
           decoration: BoxDecoration(
-            color: selected ? const Color(0xFFEAF2FF) : Colors.transparent,
-            borderRadius: BorderRadius.circular(8),
+            color: selected ? const Color(0xFFF0F1F5) : Colors.transparent,
+            borderRadius: BorderRadius.circular(6),
           ),
           child: Row(
             children: [
-              Icon(
-                icon,
-                size: 18,
-                color: selected ? plannerBlue : plannerMuted,
-              ),
-              const SizedBox(width: 7),
+              Icon(icon, size: 16, color: selected ? plannerInk : plannerMuted),
+              const SizedBox(width: 6),
               Text(
                 label,
                 style: TextStyle(
-                  color: selected ? plannerBlue : plannerText,
-                  fontWeight: FontWeight.w800,
+                  color: selected ? plannerInk : plannerMuted,
+                  fontSize: 13,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 ),
               ),
             ],
@@ -123,42 +116,51 @@ class TaskOrderMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final active = value != TaskOrder.manual;
     return PopupMenuButton<TaskOrder>(
       tooltip: 'Sort tasks',
-      offset: const Offset(0, 40),
-      color: Colors.white,
-      surfaceTintColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      offset: const Offset(0, 36),
       onSelected: onChanged,
       itemBuilder: (context) => [
         for (final order in TaskOrder.values)
           PopupMenuItem(
             value: order,
+            height: 38,
             child: Row(
               children: [
-                Icon(
-                  order == value ? Icons.check_rounded : Icons.sort_rounded,
-                  size: 18,
-                  color: order == value ? plannerBlue : plannerMuted,
+                SizedBox(
+                  width: 18,
+                  child: order == value
+                      ? const Icon(
+                          Icons.check_rounded,
+                          size: 16,
+                          color: plannerBlue,
+                        )
+                      : null,
                 ),
-                const SizedBox(width: 10),
-                Text(order.label),
+                const SizedBox(width: 8),
+                Text(
+                  order.label,
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: order == value ? plannerInk : plannerText,
+                    fontWeight: order == value
+                        ? FontWeight.w600
+                        : FontWeight.w500,
+                  ),
+                ),
               ],
             ),
           ),
       ],
       child: Container(
-        height: 38,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        height: 32,
+        padding: const EdgeInsets.symmetric(horizontal: 10),
         decoration: BoxDecoration(
-          color: value == TaskOrder.manual
-              ? Colors.white
-              : const Color(0xFFEAF2FF),
-          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(6),
           border: Border.all(
-            color: value == TaskOrder.manual
-                ? plannerBorder
-                : const Color(0xFFCFE0FF),
+            color: active ? const Color(0xFFBFD4FA) : plannerBorder,
           ),
         ),
         child: Row(
@@ -166,15 +168,16 @@ class TaskOrderMenu extends StatelessWidget {
           children: [
             Icon(
               Icons.swap_vert_rounded,
-              size: 17,
-              color: value == TaskOrder.manual ? plannerText : plannerBlue,
+              size: 15,
+              color: active ? plannerBlue : plannerMuted,
             ),
-            const SizedBox(width: 8),
+            const SizedBox(width: 6),
             Text(
-              value == TaskOrder.manual ? 'Sort' : value.label,
+              active ? value.label : 'Sort',
               style: TextStyle(
-                color: value == TaskOrder.manual ? plannerText : plannerBlue,
-                fontWeight: FontWeight.w700,
+                color: active ? plannerBlue : plannerText,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ],
@@ -184,23 +187,3 @@ class TaskOrderMenu extends StatelessWidget {
   }
 }
 
-class ToolButton extends StatelessWidget {
-  const ToolButton({super.key, required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: () {},
-      icon: Icon(icon, size: 17),
-      label: Text(label),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: plannerText,
-        side: const BorderSide(color: plannerBorder),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-      ),
-    );
-  }
-}

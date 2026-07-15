@@ -31,9 +31,13 @@ class BoardHeader extends StatelessWidget {
         ? 0
         : (board.doneCount / board.taskCount * 100).round();
     final canAddTask = board.groups.isNotEmpty;
+    final groupCount = board.groups.length;
+    final summary =
+        '$groupCount ${groupCount == 1 ? 'group' : 'groups'} · '
+        '${board.taskCount} ${board.taskCount == 1 ? 'task' : 'tasks'}';
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(28, 24, 28, 18),
+      padding: const EdgeInsets.fromLTRB(28, 20, 28, 16),
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(bottom: BorderSide(color: plannerBorder)),
@@ -42,31 +46,16 @@ class BoardHeader extends StatelessWidget {
         builder: (context, constraints) {
           final narrow = constraints.maxWidth < 860;
           final metrics = Wrap(
-            spacing: 12,
-            runSpacing: 12,
+            spacing: 10,
+            runSpacing: 10,
             children: [
-              MetricTile(
-                icon: Icons.list_alt_rounded,
-                label: 'Tasks',
-                value: '${board.taskCount}',
-                color: plannerBlue,
-              ),
-              MetricTile(
-                icon: Icons.check_circle_rounded,
-                label: 'Done',
-                value: '${board.doneCount}',
-                color: plannerGreen,
-              ),
-              MetricTile(
-                icon: Icons.trending_up_rounded,
-                label: 'Complete',
-                value: '$completion%',
-                color: plannerPurple,
-              ),
+              MetricTile(label: 'Tasks', value: '${board.taskCount}'),
+              MetricTile(label: 'Done', value: '${board.doneCount}'),
+              MetricTile(label: 'Complete', value: '$completion%'),
             ],
           );
           final search = SizedBox(
-            width: narrow ? double.infinity : 300,
+            width: narrow ? double.infinity : 280,
             child: _SearchField(
               controller: searchController,
               query: query,
@@ -92,22 +81,26 @@ class BoardHeader extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(
                                   color: plannerInk,
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.w800,
+                                  fontSize: 22,
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.3,
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 4),
+                            const SizedBox(width: 2),
                             _BoardActionsMenu(
                               onRenameBoard: onRenameBoard,
                               onDeleteBoard: onDeleteBoard,
                             ),
                           ],
                         ),
-                        const SizedBox(height: 6),
-                        const Text(
-                          'A private desktop workspace for projects, tasks, owners, dates, and progress.',
-                          style: TextStyle(color: plannerMuted),
+                        const SizedBox(height: 2),
+                        Text(
+                          summary,
+                          style: const TextStyle(
+                            color: plannerMuted,
+                            fontSize: 13,
+                          ),
                         ),
                       ],
                     ),
@@ -115,38 +108,21 @@ class BoardHeader extends StatelessWidget {
                   const Spacer(),
                   OutlinedButton.icon(
                     onPressed: onAddGroup,
-                    icon: const Icon(Icons.add_box_outlined),
+                    icon: const Icon(Icons.add_rounded, size: 16),
                     label: const Text('New group'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: plannerText,
-                      side: const BorderSide(color: plannerBorder),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 16,
-                      ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
                   ),
-                  const SizedBox(width: 10),
+                  const SizedBox(width: 8),
                   FilledButton.icon(
                     onPressed: canAddTask ? onAddTask : null,
-                    icon: const Icon(Icons.add_rounded),
+                    icon: const Icon(Icons.add_rounded, size: 16),
                     label: const Text('New task'),
-                    style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 16,
-                      ),
-                    ),
                   ),
                 ],
               ),
-              const SizedBox(height: 22),
+              const SizedBox(height: 16),
               if (narrow) ...[
                 metrics,
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
                 search,
               ] else
                 Row(children: [metrics, const Spacer(), search]),
@@ -159,59 +135,42 @@ class BoardHeader extends StatelessWidget {
 }
 
 class MetricTile extends StatelessWidget {
-  const MetricTile({
-    super.key,
-    required this.icon,
-    required this.label,
-    required this.value,
-    required this.color,
-  });
+  const MetricTile({super.key, required this.label, required this.value});
 
-  final IconData icon;
   final String label;
   final String value;
-  final Color color;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 150,
-      height: 62,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
+      constraints: const BoxConstraints(minWidth: 104),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FC),
-        borderRadius: BorderRadius.circular(8),
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(6),
         border: Border.all(color: plannerBorder),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
         children: [
-          Container(
-            width: 34,
-            height: 34,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
+          Text(
+            label.toUpperCase(),
+            style: const TextStyle(
+              color: plannerMuted,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.6,
             ),
-            child: Icon(icon, color: color, size: 19),
           ),
-          const SizedBox(width: 10),
-          Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                value,
-                style: const TextStyle(
-                  color: plannerInk,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w800,
-                ),
-              ),
-              Text(
-                label,
-                style: const TextStyle(color: plannerMuted, fontSize: 12),
-              ),
-            ],
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: plannerInk,
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+            ),
           ),
         ],
       ),
@@ -235,8 +194,13 @@ class _SearchField extends StatelessWidget {
     return TextField(
       controller: controller,
       onChanged: onChanged,
+      style: const TextStyle(color: plannerInk, fontSize: 13),
       decoration: InputDecoration(
-        prefixIcon: const Icon(Icons.search_rounded, size: 20),
+        prefixIcon: const Icon(
+          Icons.search_rounded,
+          size: 18,
+          color: plannerMuted,
+        ),
         suffixIcon: query.isEmpty
             ? null
             : IconButton(
@@ -244,7 +208,11 @@ class _SearchField extends StatelessWidget {
                   controller.clear();
                   onChanged('');
                 },
-                icon: const Icon(Icons.close_rounded, size: 18),
+                icon: const Icon(
+                  Icons.close_rounded,
+                  size: 16,
+                  color: plannerMuted,
+                ),
               ),
         hintText: 'Search tasks',
       ),
@@ -264,11 +232,8 @@ class _BoardActionsMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<_BoardAction>(
-      tooltip: 'Board actions',
-      offset: const Offset(0, 36),
-      color: Colors.white,
-      surfaceTintColor: Colors.white,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      tooltip: 'Board options',
+      offset: const Offset(0, 32),
       onSelected: (action) {
         switch (action) {
           case _BoardAction.rename:
@@ -282,6 +247,7 @@ class _BoardActionsMenu extends StatelessWidget {
       itemBuilder: (context) => const [
         PopupMenuItem(
           value: _BoardAction.rename,
+          height: 38,
           child: _MenuActionLabel(
             icon: Icons.edit_outlined,
             label: 'Edit board',
@@ -289,6 +255,7 @@ class _BoardActionsMenu extends StatelessWidget {
         ),
         PopupMenuItem(
           value: _BoardAction.delete,
+          height: 38,
           child: _MenuActionLabel(
             icon: Icons.delete_outline_rounded,
             label: 'Delete board',
@@ -297,9 +264,9 @@ class _BoardActionsMenu extends StatelessWidget {
         ),
       ],
       child: const SizedBox(
-        width: 34,
-        height: 34,
-        child: Icon(Icons.more_horiz_rounded, color: plannerText, size: 22),
+        width: 30,
+        height: 30,
+        child: Icon(Icons.more_horiz_rounded, color: plannerMuted, size: 20),
       ),
     );
   }
@@ -323,11 +290,15 @@ class _MenuActionLabel extends StatelessWidget {
     final color = danger ? plannerRed : plannerText;
     return Row(
       children: [
-        Icon(icon, color: color, size: 18),
+        Icon(icon, color: color, size: 16),
         const SizedBox(width: 10),
         Text(
           label,
-          style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ],
     );

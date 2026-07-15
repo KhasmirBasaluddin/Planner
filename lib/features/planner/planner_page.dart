@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import '../../core/drift/app_database.dart' show AppDatabase;
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
+import 'widgets/board_calendar.dart';
 import 'widgets/board_header.dart';
+import 'widgets/board_kanban.dart';
 import 'widgets/board_table.dart';
 import 'widgets/board_toolbar.dart';
 import 'widgets/planner_dialogs.dart';
@@ -151,6 +153,31 @@ class _PlannerPageState extends State<PlannerPage> {
     }
   }
 
+  /// Runs a database mutation, surfacing any failure as a snackbar instead of
+  /// silently swallowing it. Returns true on success.
+  Future<bool> _guard(
+    Future<void> Function() action, {
+    String? failureMessage,
+  }) async {
+    try {
+      await action();
+      return true;
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              behavior: SnackBarBehavior.floating,
+              backgroundColor: plannerRed,
+              content: Text(failureMessage ?? 'Something went wrong: $error'),
+            ),
+          );
+      }
+      return false;
+    }
+  }
+
   Future<void> _createBoard() async {
     final result = await showNameDialog(
       context: context,
@@ -162,12 +189,15 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    final boardId = await widget.database.createBoard(
-      name: result.name,
-      color: result.color,
-    );
-    await _loadBoards();
-    if (!mounted) {
+    int? boardId;
+    final ok = await _guard(() async {
+      boardId = await widget.database.createBoard(
+        name: result.name,
+        color: result.color,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not create the board.');
+    if (!ok || !mounted) {
       return;
     }
     final index = _boards.indexWhere((board) => board.id == boardId);
@@ -188,12 +218,17 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.updateBoardName(boardId: board.id, name: result.name);
-    await widget.database.updateBoardColor(
-      boardId: board.id,
-      color: result.color,
-    );
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.updateBoardName(
+        boardId: board.id,
+        name: result.name,
+      );
+      await widget.database.updateBoardColor(
+        boardId: board.id,
+        color: result.color,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not save the board.');
   }
 
   Future<void> _deleteBoard(Board board) async {
@@ -207,8 +242,10 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.deleteBoard(board.id);
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.deleteBoard(board.id);
+      await _loadBoards();
+    }, failureMessage: 'Could not delete the board.');
   }
 
   Future<void> _addGroup() async {
@@ -227,12 +264,14 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.createGroup(
-      boardId: board.id,
-      name: result.name,
-      color: result.color,
-    );
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.createGroup(
+        boardId: board.id,
+        name: result.name,
+        color: result.color,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not create the group.');
   }
 
   Future<void> _renameGroup(TaskGroup group) async {
@@ -247,12 +286,17 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.updateGroupName(groupId: group.id, name: result.name);
-    await widget.database.updateGroupColor(
-      groupId: group.id,
-      color: result.color,
-    );
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.updateGroupName(
+        groupId: group.id,
+        name: result.name,
+      );
+      await widget.database.updateGroupColor(
+        groupId: group.id,
+        color: result.color,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not save the group.');
   }
 
   Future<void> _deleteGroup(TaskGroup group) async {
@@ -266,9 +310,11 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.deleteGroup(group.id);
-    _collapsedGroupIds.remove(group.id);
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.deleteGroup(group.id);
+      _collapsedGroupIds.remove(group.id);
+      await _loadBoards();
+    }, failureMessage: 'Could not delete the group.');
   }
 
   Future<void> _addTask() async {
@@ -285,18 +331,20 @@ class _PlannerPageState extends State<PlannerPage> {
     final group = board.groups.firstWhere(
       (group) => group.id == result.groupId,
     );
-    await widget.database.addTask(
-      groupId: result.groupId,
-      title: result.title,
-      owner: result.owner,
-      status: result.status,
-      priority: result.priority,
-      dueDate: result.dueDate,
-      timeline: result.timeline,
-      progress: result.progress,
-      position: group.tasks.length,
-    );
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.addTask(
+        groupId: result.groupId,
+        title: result.title,
+        owner: result.owner,
+        status: result.status,
+        priority: result.priority,
+        dueDate: result.dueDate,
+        timeline: result.timeline,
+        progress: result.progress,
+        position: group.tasks.length,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not create the task.');
   }
 
   Future<void> _editTask(PlannerTask task) async {
@@ -314,18 +362,20 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.updateTask(
-      task: task,
-      groupId: result.groupId,
-      title: result.title,
-      owner: result.owner,
-      status: result.status,
-      priority: result.priority,
-      dueDate: result.dueDate,
-      timeline: result.timeline,
-      progress: result.progress,
-    );
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.updateTask(
+        task: task,
+        groupId: result.groupId,
+        title: result.title,
+        owner: result.owner,
+        status: result.status,
+        priority: result.priority,
+        dueDate: result.dueDate,
+        timeline: result.timeline,
+        progress: result.progress,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not save the task.');
   }
 
   Future<void> _deleteTask(PlannerTask task) async {
@@ -338,18 +388,24 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
 
-    await widget.database.deleteTask(task.id);
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.deleteTask(task.id);
+      await _loadBoards();
+    }, failureMessage: 'Could not delete the task.');
   }
 
   Future<void> _changeStatus(PlannerTask task, TaskStatus status) async {
-    await widget.database.updateTaskStatus(task, status);
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.updateTaskStatus(task, status);
+      await _loadBoards();
+    }, failureMessage: 'Could not update the status.');
   }
 
   Future<void> _changeProgress(PlannerTask task, double progress) async {
-    await widget.database.updateTaskProgress(task, progress);
-    await _loadBoards();
+    await _guard(() async {
+      await widget.database.updateTaskProgress(task, progress);
+      await _loadBoards();
+    }, failureMessage: 'Could not update the progress.');
   }
 
   Future<void> _reorderTask(TaskGroup group, int oldIndex, int newIndex) async {
@@ -407,10 +463,19 @@ class _PlannerPageState extends State<PlannerPage> {
       });
     }
 
-    await widget.database.updateTaskPositions(
-      group.id,
-      tasks.map((task) => task.id).toList(),
-    );
+    await _guard(() async {
+      await widget.database.updateTaskPositions(
+        group.id,
+        tasks.map((task) => task.id).toList(),
+      );
+    }, failureMessage: 'Could not reorder tasks.');
+  }
+
+  Future<void> _changeNotes(PlannerTask task, List<String> notes) async {
+    await _guard(() async {
+      await widget.database.updateTaskNotes(task, notes);
+      await _loadBoards();
+    }, failureMessage: 'Could not save the notes.');
   }
 
   void _toggleGroup(TaskGroup group) {
@@ -475,6 +540,7 @@ class _PlannerPageState extends State<PlannerPage> {
                   onDeleteTask: _deleteTask,
                   onStatusChanged: _changeStatus,
                   onProgressChanged: _changeProgress,
+                  onNotesChanged: _changeNotes,
                   onTaskReorder: _reorderTask,
                 ),
               ),
@@ -512,6 +578,7 @@ class _PlannerContent extends StatelessWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
+    required this.onNotesChanged,
     required this.onTaskReorder,
   });
 
@@ -541,6 +608,8 @@ class _PlannerContent extends StatelessWidget {
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
+  final Future<void> Function(PlannerTask task, List<String> notes)
+  onNotesChanged;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -592,23 +661,42 @@ class _PlannerContent extends StatelessWidget {
                 ],
               );
             },
-            child: mode == ViewMode.table
-                ? BoardTable(
-                    key: ValueKey('table-${board!.id}-$query'),
-                    groups: groups,
-                    collapsedGroupIds: collapsedGroupIds,
-                    onToggleGroup: onToggleGroup,
-                    onRenameGroup: onRenameGroup,
-                    onDeleteGroup: onDeleteGroup,
-                    onEditTask: onEditTask,
-                    onDeleteTask: onDeleteTask,
-                    onStatusChanged: onStatusChanged,
-                    onProgressChanged: onProgressChanged,
-                    onTaskReorder: taskOrder == TaskOrder.manual
-                        ? onTaskReorder
-                        : null,
-                  )
-                : _PlaceholderView(key: ValueKey(mode), mode: mode),
+            child: switch (mode) {
+              ViewMode.table => BoardTable(
+                key: ValueKey('table-${board!.id}-$query'),
+                groups: groups,
+                collapsedGroupIds: collapsedGroupIds,
+                onToggleGroup: onToggleGroup,
+                onRenameGroup: onRenameGroup,
+                onDeleteGroup: onDeleteGroup,
+                onEditTask: onEditTask,
+                onDeleteTask: onDeleteTask,
+                onStatusChanged: onStatusChanged,
+                onProgressChanged: onProgressChanged,
+                onNotesChanged: onNotesChanged,
+                onTaskReorder: taskOrder == TaskOrder.manual
+                    ? onTaskReorder
+                    : null,
+              ),
+              ViewMode.kanban => BoardKanban(
+                key: ValueKey('kanban-${board!.id}-$query'),
+                groups: groups,
+                onEditTask: onEditTask,
+                onDeleteTask: onDeleteTask,
+                onStatusChanged: onStatusChanged,
+                onProgressChanged: onProgressChanged,
+                onNotesChanged: onNotesChanged,
+              ),
+              ViewMode.calendar => BoardCalendar(
+                key: ValueKey('calendar-${board!.id}-$query'),
+                groups: groups,
+                onEditTask: onEditTask,
+                onDeleteTask: onDeleteTask,
+                onStatusChanged: onStatusChanged,
+                onProgressChanged: onProgressChanged,
+                onNotesChanged: onNotesChanged,
+              ),
+            },
           ),
         ),
       ],
@@ -624,107 +712,33 @@ class EmptyPlannerState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Container(
-        width: 440,
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: plannerBorder),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 48,
-              height: 48,
-              decoration: BoxDecoration(
-                color: plannerBlue.withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Icon(
-                Icons.dashboard_customize_rounded,
-                color: plannerBlue,
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'No boards yet',
+            style: TextStyle(
+              color: plannerInk,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
             ),
-            const SizedBox(height: 16),
-            const Text(
-              'Create your first board',
-              style: TextStyle(
-                color: plannerInk,
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Start with an empty board, then add groups and tasks as you plan.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: plannerMuted, height: 1.4),
-            ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              onPressed: onCreateBoard,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('New board'),
-              style: FilledButton.styleFrom(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 18,
-                  vertical: 16,
-                ),
-              ),
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Create a board to start organizing tasks.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: plannerMuted, fontSize: 13, height: 1.4),
+          ),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: onCreateBoard,
+            icon: const Icon(Icons.add_rounded, size: 16),
+            label: const Text('New board'),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _PlaceholderView extends StatelessWidget {
-  const _PlaceholderView({super.key, required this.mode});
 
-  final ViewMode mode;
-
-  @override
-  Widget build(BuildContext context) {
-    final label = mode == ViewMode.kanban ? 'Kanban' : 'Calendar';
-    return Center(
-      child: Container(
-        width: 420,
-        padding: const EdgeInsets.all(28),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: plannerBorder),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              mode == ViewMode.kanban
-                  ? Icons.view_kanban_rounded
-                  : Icons.calendar_today_rounded,
-              color: plannerBlue,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              '$label view',
-              style: const TextStyle(
-                fontSize: 22,
-                fontWeight: FontWeight.w800,
-                color: plannerInk,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '$label layout will be built after the table workflow is stable.',
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: plannerMuted),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}

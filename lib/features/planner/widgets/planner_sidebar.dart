@@ -39,30 +39,17 @@ class PlannerSidebar extends StatelessWidget {
           children: [
             _Brand(compact: compact),
             const SizedBox(height: 28),
-            _SideAction(
-              icon: Icons.home_rounded,
-              label: 'Home',
-              selected: true,
-              compact: compact,
-            ),
-            _SideAction(
-              icon: Icons.notifications_none_rounded,
-              label: 'Updates',
-              compact: compact,
-            ),
-            _SideAction(
-              icon: Icons.calendar_month_rounded,
-              label: 'Calendar',
-              compact: compact,
-            ),
-            const SizedBox(height: 24),
             if (!compact)
-              const Text(
-                'WORKSPACES',
-                style: TextStyle(
-                  color: Color(0xFF9EA4C4),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+              const Padding(
+                padding: EdgeInsets.only(left: 12),
+                child: Text(
+                  'Workspaces',
+                  style: TextStyle(
+                    color: Color(0xFF9EA4C4),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
                 ),
               ),
             if (!compact) const SizedBox(height: 10),
@@ -110,67 +97,18 @@ class _Brand extends StatelessWidget {
           ),
         ),
         if (!compact) ...[
-          const SizedBox(width: 12),
+          const SizedBox(width: 10),
           const Text(
             'Planner',
             style: TextStyle(
               color: Colors.white,
-              fontSize: 22,
-              fontWeight: FontWeight.w800,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              letterSpacing: -0.2,
             ),
           ),
         ],
       ],
-    );
-  }
-}
-
-class _SideAction extends StatelessWidget {
-  const _SideAction({
-    required this.icon,
-    required this.label,
-    required this.compact,
-    this.selected = false,
-  });
-
-  final IconData icon;
-  final String label;
-  final bool compact;
-  final bool selected;
-
-  @override
-  Widget build(BuildContext context) {
-    return Tooltip(
-      message: compact ? label : '',
-      child: Container(
-        height: 42,
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 12),
-        decoration: BoxDecoration(
-          color: selected
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Row(
-          mainAxisAlignment: compact
-              ? MainAxisAlignment.center
-              : MainAxisAlignment.start,
-          children: [
-            Icon(icon, color: Colors.white, size: 20),
-            if (!compact) ...[
-              const SizedBox(width: 10),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
     );
   }
 }
@@ -213,8 +151,8 @@ class _BoardNavItem extends StatelessWidget {
                   : MainAxisAlignment.start,
               children: [
                 Container(
-                  width: 10,
-                  height: 10,
+                  width: 8,
+                  height: 8,
                   decoration: BoxDecoration(
                     color: board.color,
                     shape: BoxShape.circle,
@@ -226,9 +164,14 @@ class _BoardNavItem extends StatelessWidget {
                     child: Text(
                       board.name,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
+                      style: TextStyle(
+                        color: selected
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.85),
+                        fontSize: 13,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
                       ),
                     ),
                   ),
@@ -354,11 +297,15 @@ class _SidebarMenuLabel extends StatelessWidget {
     final color = danger ? plannerRed : plannerText;
     return Row(
       children: [
-        Icon(icon, color: color, size: 18),
+        Icon(icon, color: color, size: 16),
         const SizedBox(width: 10),
         Text(
           label,
-          style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          style: TextStyle(
+            color: color,
+            fontSize: 13,
+            fontWeight: FontWeight.w500,
+          ),
         ),
       ],
     );

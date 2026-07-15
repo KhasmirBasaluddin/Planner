@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ui';
 
 import 'package:drift/drift.dart';
@@ -37,6 +38,7 @@ class PlannerTasks extends Table {
   TextColumn get timeline => text()();
   RealColumn get progress => real()();
   IntColumn get position => integer()();
+  TextColumn get notes => text().withDefault(const Constant(''))();
 }
 
 @DriftDatabase(tables: [Boards, TaskGroups, PlannerTasks])
@@ -44,11 +46,18 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
 
   @override
   MigrationStrategy get migration {
-    return MigrationStrategy(onCreate: (migrator) => migrator.createAll());
+    return MigrationStrategy(
+      onCreate: (migrator) => migrator.createAll(),
+      onUpgrade: (migrator, from, to) async {
+        if (from < 2) {
+          await migrator.addColumn(plannerTasks, plannerTasks.notes);
+        }
+      },
+    );
   }
 
   Future<List<model.Board>> loadBoards() async {
@@ -212,6 +221,19 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  Future<void> updateTaskNotes(
+    model.PlannerTask task,
+    List<String> notes,
+  ) async {
+    final cleaned = notes
+        .map((note) => note.trim())
+        .where((note) => note.isNotEmpty)
+        .toList();
+    await (update(plannerTasks)..where((row) => row.id.equals(task.id))).write(
+      PlannerTasksCompanion(notes: Value(jsonEncode(cleaned))),
+    );
+  }
+
   Future<void> updateTaskStatus(
     model.PlannerTask task,
     model.TaskStatus status,
@@ -312,7 +334,28 @@ class AppDatabase extends _$AppDatabase {
       dueDate: row.dueDate,
       timeline: row.timeline,
       progress: row.progress,
+      notes: _decodeNotes(row.notes),
     );
+  }
+
+  /// Notes are stored as a JSON array of strings. Falls back to treating any
+  /// legacy plain-text value as a single note.
+  List<String> _decodeNotes(String raw) {
+    if (raw.trim().isEmpty) {
+      return const [];
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is List) {
+        return decoded
+            .map((item) => item.toString())
+            .where((note) => note.trim().isNotEmpty)
+            .toList();
+      }
+    } catch (_) {
+      // Legacy single-note text.
+    }
+    return [raw];
   }
 }
 

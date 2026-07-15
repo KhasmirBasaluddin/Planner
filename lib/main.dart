@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_quill/flutter_quill.dart';
 
 import 'core/constants.dart';
 import 'core/drift/app_database.dart';
@@ -43,6 +44,7 @@ class _PlannerAppState extends State<PlannerApp> {
       debugShowCheckedModeBanner: false,
       title: appName,
       theme: buildAppTheme(),
+      localizationsDelegates: FlutterQuillLocalizations.localizationsDelegates,
       home: PlannerPage(database: _database),
     );
   }
