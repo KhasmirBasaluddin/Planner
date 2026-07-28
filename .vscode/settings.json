@@ -1,0 +1,23 @@
+{
+  // The email templates use Outlook-only CSS (`mso-*`), which VS Code's CSS
+  // linter reports as unknown properties. They are correct and required —
+  // Outlook renders with Word's engine and needs them; every other client
+  // ignores them harmlessly. Silencing the rule keeps the Problems panel
+  // meaningful instead of full of expected noise.
+  "css.lint.unknownProperties": "ignore",
+
+  "[html]": {
+    "editor.formatOnSave": false
+  },
+
+  // Generated Drift/Freezed-style output and build artifacts should not appear
+  // in search results.
+  "search.exclude": {
+    "**/build": true,
+    "**/.dart_tool": true
+  },
+
+  "files.associations": {
+    ".env.example": "dotenv"
+  }
+}

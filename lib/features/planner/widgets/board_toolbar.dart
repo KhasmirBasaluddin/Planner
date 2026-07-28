@@ -28,6 +28,14 @@ class BoardToolbar extends StatelessWidget {
       ),
       child: Row(
         children: [
+          // The three view buttons have fixed labels; on a narrow window they
+          // would push Sort off the edge, so the group scrolls instead.
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              physics: const ClampingScrollPhysics(),
+              child: Row(
+                children: [
           ViewButton(
             icon: Icons.table_rows_outlined,
             label: 'Table',
@@ -46,7 +54,11 @@ class BoardToolbar extends StatelessWidget {
             selected: mode == ViewMode.calendar,
             onTap: () => onModeChanged(ViewMode.calendar),
           ),
-          const Spacer(),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
           TaskOrderMenu(value: taskOrder, onChanged: onTaskOrderChanged),
         ],
       ),

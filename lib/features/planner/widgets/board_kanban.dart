@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/widgets/user_avatar.dart';
 import 'board_table.dart';
 import 'planner_dialogs.dart';
 
@@ -9,22 +10,23 @@ class BoardKanban extends StatelessWidget {
   const BoardKanban({
     super.key,
     required this.groups,
+    required this.members,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
   });
 
   final List<TaskGroup> groups;
+  final List<WorkspaceMember> members;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -61,11 +63,12 @@ class BoardKanban extends StatelessWidget {
                       child: _KanbanColumn(
                         status: status,
                         tasks: _tasksByStatus(tasks, status),
+                        members: members,
                         onEditTask: onEditTask,
                         onDeleteTask: onDeleteTask,
                         onStatusChanged: onStatusChanged,
                         onProgressChanged: onProgressChanged,
-                        onNotesChanged: onNotesChanged,
+                        onOpenNotes: onOpenNotes,
                       ),
                     ),
                     if (status != _statusOrder.last) const SizedBox(width: 12),
@@ -88,11 +91,12 @@ class BoardKanban extends StatelessWidget {
                 _KanbanColumn(
                   status: status,
                   tasks: _tasksByStatus(tasks, status),
+                  members: members,
                   onEditTask: onEditTask,
                   onDeleteTask: onDeleteTask,
                   onStatusChanged: onStatusChanged,
                   onProgressChanged: onProgressChanged,
-                  onNotesChanged: onNotesChanged,
+                  onOpenNotes: onOpenNotes,
                 ),
             ],
           );
@@ -117,11 +121,12 @@ class BoardKanban extends StatelessWidget {
                     child: _KanbanColumn(
                       status: status,
                       tasks: _tasksByStatus(tasks, status),
+                      members: members,
                       onEditTask: onEditTask,
                       onDeleteTask: onDeleteTask,
                       onStatusChanged: onStatusChanged,
                       onProgressChanged: onProgressChanged,
-                      onNotesChanged: onNotesChanged,
+                      onOpenNotes: onOpenNotes,
                     ),
                   ),
                   if (status != _statusOrder.last) const SizedBox(width: 12),
@@ -150,23 +155,24 @@ class _KanbanColumn extends StatelessWidget {
   const _KanbanColumn({
     required this.status,
     required this.tasks,
+    required this.members,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
   });
 
   final TaskStatus status;
   final List<_KanbanTask> tasks;
+  final List<WorkspaceMember> members;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -179,10 +185,8 @@ class _KanbanColumn extends StatelessWidget {
         return AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           decoration: BoxDecoration(
-            color: hovering
-                ? const Color(0xFFEDF0F6)
-                : const Color(0xFFF2F3F7),
-            borderRadius: BorderRadius.circular(8),
+            color: hovering ? plannerHover : plannerSurface,
+            borderRadius: BorderRadius.circular(radiusMd),
             border: Border.all(
               color: hovering ? color.withValues(alpha: 0.45) : plannerBorder,
             ),
@@ -236,10 +240,11 @@ class _KanbanColumn extends StatelessWidget {
                           final entry = tasks[index];
                           final card = _KanbanCard(
                             entry: entry,
+                            members: members,
                             onEditTask: onEditTask,
                             onDeleteTask: onDeleteTask,
                             onProgressChanged: onProgressChanged,
-                            onNotesChanged: onNotesChanged,
+                            onOpenNotes: onOpenNotes,
                           );
                           return LayoutBuilder(
                             builder: (context, constraints) {
@@ -253,7 +258,7 @@ class _KanbanColumn extends StatelessWidget {
                                     color: Colors.transparent,
                                     child: Container(
                                       decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(6),
+                                        borderRadius: BorderRadius.circular(radiusSm),
                                         boxShadow: const [
                                           BoxShadow(
                                             color: Color(0x1F101828),
@@ -288,31 +293,32 @@ class _KanbanColumn extends StatelessWidget {
 class _KanbanCard extends StatelessWidget {
   const _KanbanCard({
     required this.entry,
+    required this.members,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
   });
 
   final _KanbanTask entry;
+  final List<WorkspaceMember> members;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
     return InkWell(
       onTap: () => onEditTask(task),
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(radiusSm),
       child: Container(
         padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(radiusSm),
           border: Border.all(color: plannerBorder),
           boxShadow: const [
             BoxShadow(
@@ -344,11 +350,7 @@ class _KanbanCard extends StatelessWidget {
                     ),
                   ),
                 ),
-                NoteButton(
-                  task: task,
-                  onNotesChanged: onNotesChanged,
-                  size: 26,
-                ),
+                NoteButton(task: task, onOpenNotes: onOpenNotes, size: 26),
                 _TaskMenu(
                   onEdit: () => onEditTask(task),
                   onDelete: () => onDeleteTask(task),
@@ -391,7 +393,7 @@ class _KanbanCard extends StatelessWidget {
             const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.only(right: 4),
-              child: _TaskMetaRow(task: task),
+              child: _TaskMetaRow(task: task, members: members),
             ),
             const SizedBox(height: 10),
             Padding(
@@ -409,23 +411,38 @@ class _KanbanCard extends StatelessWidget {
 }
 
 class _TaskMetaRow extends StatelessWidget {
-  const _TaskMetaRow({required this.task});
+  const _TaskMetaRow({required this.task, required this.members});
 
   final PlannerTask task;
+  final List<WorkspaceMember> members;
 
   @override
   Widget build(BuildContext context) {
+    final assignee = members
+        .where((member) => member.profile.id == task.assigneeId)
+        .firstOrNull;
+    final due = task.dueDate;
+    final dueColor = task.isOverdue
+        ? plannerRed
+        : (due == null ? plannerFaint : plannerText);
     return Row(
       children: [
-        OwnerAvatar(label: task.owner),
+        if (assignee != null)
+          UserAvatar(profile: assignee.profile, size: 26)
+        else
+          OwnerAvatar(label: task.owner),
         const SizedBox(width: 8),
-        const Icon(Icons.event_outlined, size: 13, color: plannerMuted),
+        Icon(Icons.event_outlined, size: 13, color: dueColor),
         const SizedBox(width: 4),
         Expanded(
           child: Text(
-            task.dueDate,
+            due == null ? 'No date' : formatDate(due),
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(color: plannerText, fontSize: 12),
+            style: TextStyle(
+              color: dueColor,
+              fontSize: 12,
+              fontWeight: task.isOverdue ? FontWeight.w600 : FontWeight.w400,
+            ),
           ),
         ),
       ],
@@ -447,7 +464,7 @@ class _CompactProgress extends StatelessWidget {
       message: 'Update progress',
       child: InkWell(
         onTap: () => _showProgressDialog(context),
-        borderRadius: BorderRadius.circular(6),
+        borderRadius: BorderRadius.circular(radiusSm),
         child: Row(
           children: [
             Expanded(
@@ -622,13 +639,13 @@ class _KanbanPresetChip extends StatelessWidget {
     final label = '${(value * 100).round()}%';
     return InkWell(
       onTap: onSelected,
-      borderRadius: BorderRadius.circular(6),
+      borderRadius: BorderRadius.circular(radiusSm),
       child: Container(
         height: 32,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: selected ? const Color(0xFFEAF1FE) : Colors.white,
-          borderRadius: BorderRadius.circular(6),
+          borderRadius: BorderRadius.circular(radiusSm),
           border: Border.all(
             color: selected ? const Color(0xFFBFD4FA) : plannerBorder,
           ),
@@ -657,7 +674,7 @@ class _EmptyColumn extends StatelessWidget {
       child: Text(
         hovering ? 'Drop here' : 'No tasks',
         style: TextStyle(
-          color: hovering ? plannerText : const Color(0xFFA6ACBF),
+          color: hovering ? plannerText : plannerFaint,
           fontSize: 12,
           fontWeight: FontWeight.w500,
         ),

@@ -2,34 +2,80 @@ import 'package:flutter/material.dart';
 
 import '../../models/planner_models.dart';
 
-const Color plannerBlue = Color(0xFF0F6BFF);
-const Color plannerGreen = Color(0xFF00A36C);
-const Color plannerYellow = Color(0xFFFDAB3D);
-const Color plannerRed = Color(0xFFE2445C);
-const Color plannerPurple = Color(0xFF784BD1);
-const Color plannerTeal = Color(0xFF0CA2A1);
-const Color plannerOrange = Color(0xFFFB7D28);
-const Color plannerMagenta = Color(0xFFCE4DFF);
-const Color plannerCyan = Color(0xFF3DB5FF);
-const Color plannerBrown = Color(0xFF8C5B32);
-const Color plannerInk = Color(0xFF20233A);
-const Color plannerText = Color(0xFF4B5168);
-const Color plannerMuted = Color(0xFF6B7188);
-const Color plannerBorder = Color(0xFFE1E4EE);
-const Color plannerSurface = Color(0xFFF6F7FB);
-const Color plannerSidebar = Color(0xFF181B34);
+/// Design tokens.
+///
+/// The palette is built around a deep indigo brand and a warm neutral ramp:
+/// greys carry a slight warmth (hue ~250, very low saturation) so large
+/// surfaces read as paper rather than the cold blue-grey of default Material.
+/// Accents are picked for distinguishability at small sizes — the status dots
+/// and pills are often only a few pixels wide.
 
-/// Sticky-note paper tones. These are deliberately softer than the accent
-/// colors above: a note is a large filled surface with text on top, so it needs
-/// low saturation to stay readable.
-const Color noteYellow = Color(0xFFFFF3B0);
-const Color noteGreen = Color(0xFFD4F5DD);
-const Color noteBlue = Color(0xFFD6E9FF);
-const Color notePink = Color(0xFFFFDCE5);
-const Color notePurple = Color(0xFFE8DEFF);
-const Color noteOrange = Color(0xFFFFE0C7);
-const Color noteTeal = Color(0xFFCFF1EF);
-const Color noteGray = Color(0xFFE9ECF3);
+// --- Brand ---------------------------------------------------------------
+const Color plannerBlue = Color(0xFF4C5BD4); // primary action
+const Color plannerIndigo = Color(0xFF3B47AE); // pressed / deep
+const Color plannerViolet = Color(0xFF7B5CF0); // secondary accent
+
+// --- Status and accents --------------------------------------------------
+const Color plannerGreen = Color(0xFF17A673);
+const Color plannerYellow = Color(0xFFE8A33D);
+const Color plannerRed = Color(0xFFE05260);
+const Color plannerPurple = Color(0xFF7B5CF0);
+const Color plannerTeal = Color(0xFF12A5A0);
+const Color plannerOrange = Color(0xFFEE7A45);
+const Color plannerMagenta = Color(0xFFC44FD1);
+const Color plannerCyan = Color(0xFF3FA9E0);
+const Color plannerBrown = Color(0xFF9A6B44);
+const Color plannerSlate = Color(0xFF7C8398);
+
+// --- Neutral ramp --------------------------------------------------------
+const Color plannerInk = Color(0xFF1C1E2E); // headings
+const Color plannerText = Color(0xFF474C61); // body
+const Color plannerMuted = Color(0xFF767C93); // secondary
+const Color plannerFaint = Color(0xFFA3A8BC); // placeholder
+const Color plannerBorder = Color(0xFFE4E5EF); // hairlines
+const Color plannerDivider = Color(0xFFEFF0F6);
+const Color plannerSurface = Color(0xFFF7F7FB); // app background
+const Color plannerCard = Color(0xFFFFFFFF);
+const Color plannerHover = Color(0xFFF2F3F9);
+const Color plannerSidebar = Color(0xFF191B2E);
+const Color plannerSidebarHi = Color(0xFF24273F);
+
+// --- Elevation -----------------------------------------------------------
+/// Shadows are tinted with the ink color rather than pure black; neutral-black
+/// shadows look muddy over a warm surface.
+const List<BoxShadow> shadowSm = [
+  BoxShadow(color: Color(0x0F1C1E2E), blurRadius: 3, offset: Offset(0, 1)),
+];
+
+const List<BoxShadow> shadowMd = [
+  BoxShadow(color: Color(0x141C1E2E), blurRadius: 10, offset: Offset(0, 3)),
+  BoxShadow(color: Color(0x0A1C1E2E), blurRadius: 2, offset: Offset(0, 1)),
+];
+
+const List<BoxShadow> shadowLg = [
+  BoxShadow(color: Color(0x1F1C1E2E), blurRadius: 26, offset: Offset(0, 10)),
+  BoxShadow(color: Color(0x0D1C1E2E), blurRadius: 4, offset: Offset(0, 2)),
+];
+
+// --- Shape ---------------------------------------------------------------
+/// One radius scale, used everywhere. Mixed radii are the fastest way to make
+/// an interface look assembled from parts.
+const double radiusXs = 4;
+const double radiusSm = 6;
+const double radiusMd = 8;
+const double radiusLg = 12;
+const double radiusXl = 16;
+
+/// Note paper tones — soft, low saturation, because a note is a large filled
+/// surface with text on top.
+const Color noteYellow = Color(0xFFFDF3C7);
+const Color noteGreen = Color(0xFFD8F3E3);
+const Color noteBlue = Color(0xFFDCE8FC);
+const Color notePink = Color(0xFFFCE0E7);
+const Color notePurple = Color(0xFFE9E1FD);
+const Color noteOrange = Color(0xFFFDE6D2);
+const Color noteTeal = Color(0xFFD3F0EE);
+const Color noteGray = Color(0xFFECEDF4);
 
 const List<Color> notePalette = [
   noteYellow,
@@ -42,20 +88,42 @@ const List<Color> notePalette = [
   noteGray,
 ];
 
-/// The header band of a note: the same hue, a shade deeper, so the card reads
-/// as one object rather than two stacked rectangles.
+/// Board and group accent choices.
+const List<Color> accentPalette = [
+  plannerBlue,
+  plannerGreen,
+  plannerYellow,
+  plannerRed,
+  plannerPurple,
+  plannerTeal,
+  plannerOrange,
+  plannerMagenta,
+  plannerCyan,
+  plannerBrown,
+];
+
+/// A shade deeper than [base], for a note's header band.
 Color noteHeaderColor(Color base) {
   final hsl = HSLColor.fromColor(base);
   return hsl
-      .withSaturation((hsl.saturation * 1.08).clamp(0.0, 1.0))
-      .withLightness((hsl.lightness - 0.08).clamp(0.0, 1.0))
+      .withSaturation((hsl.saturation * 1.12).clamp(0.0, 1.0))
+      .withLightness((hsl.lightness - 0.07).clamp(0.0, 1.0))
       .toColor();
 }
 
-/// A border tone derived from the note color, for definition against the canvas.
 Color noteBorderColor(Color base) {
   final hsl = HSLColor.fromColor(base);
-  return hsl.withLightness((hsl.lightness - 0.16).clamp(0.0, 1.0)).toColor();
+  return hsl.withLightness((hsl.lightness - 0.14).clamp(0.0, 1.0)).toColor();
+}
+
+/// Readable text over an arbitrary accent fill.
+Color onAccent(Color background) {
+  return background.computeLuminance() > 0.6 ? plannerInk : Colors.white;
+}
+
+/// A tinted background for a colored pill or chip.
+Color tint(Color color, [double amount = 0.10]) {
+  return color.withValues(alpha: amount);
 }
 
 Color statusColor(TaskStatus status) {
@@ -63,14 +131,27 @@ Color statusColor(TaskStatus status) {
     TaskStatus.done => plannerGreen,
     TaskStatus.working => plannerYellow,
     TaskStatus.stuck => plannerRed,
-    TaskStatus.notStarted => const Color(0xFF8C93A8),
+    TaskStatus.notStarted => plannerSlate,
   };
 }
 
 Color priorityColor(TaskPriority priority) {
   return switch (priority) {
     TaskPriority.high => plannerRed,
-    TaskPriority.medium => plannerPurple,
-    TaskPriority.low => plannerBlue,
+    TaskPriority.medium => plannerOrange,
+    TaskPriority.low => plannerSlate,
   };
+}
+
+/// Deterministic accent for a person, so the same teammate always gets the same
+/// avatar color across the app.
+Color avatarColor(String seed) {
+  if (seed.isEmpty) {
+    return plannerSlate;
+  }
+  var hash = 0;
+  for (final unit in seed.codeUnits) {
+    hash = (hash * 31 + unit) & 0x7FFFFFFF;
+  }
+  return accentPalette[hash % accentPalette.length];
 }

@@ -1,0 +1,140 @@
+<!--
+  Supabase → Authentication → Email Templates → "Confirm signup"
+
+  Concept
+  -------
+  A page out of a paper planner, not a product notification. Warm paper stock,
+  a red margin rule down the left edge, body copy sitting on ruled lines, and a
+  section label in the corner where a date would go.
+
+  This is why it does not look like standard transactional mail: no centered
+  card floating on grey, no dark brand band, no blue pill button on white.
+
+  There is deliberately ONE action. An earlier draft drew the button as a
+  checklist item with an empty box; rendered, it read as two competing controls
+  and the box looked clickable when it was not.
+
+  Technique notes
+  ---------------
+  * Table layout + inline CSS: Outlook renders with Word's engine, which drops
+    <style> blocks, flexbox and most modern CSS.
+  * The margin rule is a 2px-wide table cell, not a border, because Outlook
+    drops borders on table cells unpredictably.
+  * The ruled lines are per-row bottom borders on a table — background-image
+    stripes do not render in Outlook at all.
+  * The button uses a VML fallback so Outlook does not collapse it to a link.
+  * mso-line-height-rule:exactly stops Outlook inflating line heights.
+    (Editors flag this as an unknown CSS property; that is expected — it is an
+    Outlook-only directive that every other client safely ignores.)
+-->
+<table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="background-color:#d9d5cc;margin:0;padding:36px 12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <tr>
+    <td align="center">
+
+      <!-- The page -->
+      <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="max-width:540px;background-color:#faf7f0;">
+        <tr>
+
+          <!-- Margin rule -->
+          <td width="2" style="background-color:#d4674f;font-size:0;line-height:0;">&nbsp;</td>
+          <td width="26" style="font-size:0;line-height:0;">&nbsp;</td>
+
+          <!-- Writing area -->
+          <td style="padding:0 30px 0 0;">
+
+            <!-- Header: brand left, date right, hairline under -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+              <tr>
+                <td style="padding:26px 0 12px 0;border-bottom:1px solid #e2ddd1;">
+                  <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+                    <tr>
+                      <td style="vertical-align:middle;">
+                        <span style="color:#2b2a27;font-size:14px;font-weight:700;letter-spacing:-0.2px;">Planner</span>
+                      </td>
+                      <td align="right" style="vertical-align:middle;">
+                        <span style="color:#a39c8c;font-size:11px;font-weight:600;letter-spacing:1.4px;text-transform:uppercase;">New account</span>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Headline, set large and tight against the rules below -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+              <tr>
+                <td style="padding:34px 0 0 0;">
+                  <h1 style="margin:0;color:#22211e;font-size:34px;font-weight:700;letter-spacing:-1.4px;mso-line-height-rule:exactly;line-height:38px;">
+                    First things first.
+                  </h1>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Ruled lines carrying the body copy -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:20px;">
+              <tr>
+                <td height="30" style="border-bottom:1px solid #e8e3d6;color:#4f4b42;font-size:14.5px;mso-line-height-rule:exactly;line-height:30px;vertical-align:bottom;">
+                  Confirm this email address and your
+                </td>
+              </tr>
+              <tr>
+                <td height="30" style="border-bottom:1px solid #e8e3d6;color:#4f4b42;font-size:14.5px;mso-line-height-rule:exactly;line-height:30px;vertical-align:bottom;">
+                  workspace is ready to use.
+                </td>
+              </tr>
+              <tr>
+                <td height="30" style="border-bottom:1px solid #e8e3d6;font-size:0;line-height:30px;">&nbsp;</td>
+              </tr>
+            </table>
+
+            <!-- The action -->
+            <table cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:26px;">
+              <tr>
+                <td style="background-color:#22211e;border-radius:5px;">
+                  <!--
+                    One plain anchor, no conditional-comment branching. The
+                    `<!--[if !mso]><!- ->` idiom that normally hides a fallback
+                    from Outlook is mangled by some clients and by Supabase's
+                    own template processing, which strips the wrapper and leaves
+                    the button rendering as bare text. A padded anchor on a
+                    coloured cell works everywhere, including Outlook, at the
+                    cost of square corners there.
+                  -->
+                  <a href="{{ .ConfirmationURL }}"
+                     style="display:inline-block;padding:13px 24px;color:#faf7f0;font-size:14px;font-weight:600;text-decoration:none;letter-spacing:-0.1px;mso-line-height-rule:exactly;line-height:16px;">
+                    Confirm &amp; continue
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Marginalia: fallback link, set small like a handwritten note -->
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation" style="margin-top:30px;">
+              <tr>
+                <td style="border-top:1px solid #e8e3d6;padding-top:16px;">
+                  <p style="margin:0;color:#8f887a;font-size:11.5px;mso-line-height-rule:exactly;line-height:17px;">
+                    Button not working? Paste this link into your browser:
+                  </p>
+                  <p style="margin:4px 0 0 0;word-break:break-all;">
+                    <a href="{{ .ConfirmationURL }}" style="color:#a5573f;font-size:11.5px;text-decoration:none;mso-line-height-rule:exactly;line-height:17px;">{{ .ConfirmationURL }}</a>
+                  </p>
+                  <p style="margin:14px 0 0 0;color:#a8a294;font-size:11.5px;mso-line-height-rule:exactly;line-height:17px;">
+                    Didn’t sign up? Ignore this — no account exists until this
+                    link is used.
+                  </p>
+                </td>
+              </tr>
+            </table>
+
+            <table width="100%" cellpadding="0" cellspacing="0" border="0" role="presentation">
+              <tr><td height="30" style="font-size:0;line-height:30px;">&nbsp;</td></tr>
+            </table>
+
+          </td>
+        </tr>
+      </table>
+
+    </td>
+  </tr>
+</table>

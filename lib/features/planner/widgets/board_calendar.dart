@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/widgets/user_avatar.dart';
 import 'board_table.dart';
 import 'planner_dialogs.dart';
 
@@ -9,22 +10,23 @@ class BoardCalendar extends StatefulWidget {
   const BoardCalendar({
     super.key,
     required this.groups,
+    required this.members,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
   });
 
   final List<TaskGroup> groups;
+  final List<WorkspaceMember> members;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   State<BoardCalendar> createState() => _BoardCalendarState();
@@ -68,6 +70,7 @@ class _BoardCalendarState extends State<BoardCalendar> {
               ? _AgendaCalendar(
                   month: _visibleMonth,
                   tasks: monthTasks,
+                  members: widget.members,
                   onPrevious: () => _changeMonth(-1),
                   onNext: () => _changeMonth(1),
                   onToday: _goToToday,
@@ -102,9 +105,10 @@ class _BoardCalendarState extends State<BoardCalendar> {
       context: context,
       builder: (context) => _TaskDetailsDialog(
         entry: entry,
+        members: widget.members,
         onEditTask: widget.onEditTask,
         onDeleteTask: widget.onDeleteTask,
-        onNotesChanged: widget.onNotesChanged,
+        onOpenNotes: widget.onOpenNotes,
       ),
     );
   }
@@ -180,6 +184,7 @@ class _AgendaCalendar extends StatelessWidget {
   const _AgendaCalendar({
     required this.month,
     required this.tasks,
+    required this.members,
     required this.onPrevious,
     required this.onNext,
     required this.onToday,
@@ -188,6 +193,7 @@ class _AgendaCalendar extends StatelessWidget {
 
   final DateTime month;
   final List<_CalendarTask> tasks;
+  final List<WorkspaceMember> members;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final VoidCallback onToday;
@@ -224,6 +230,7 @@ class _AgendaCalendar extends StatelessWidget {
             _AgendaDay(
               date: day,
               tasks: _tasksForDay(tasks, day),
+              members: members,
               onOpenTask: onOpenTask,
             ),
             const SizedBox(height: 10),
@@ -423,11 +430,13 @@ class _AgendaDay extends StatelessWidget {
   const _AgendaDay({
     required this.date,
     required this.tasks,
+    required this.members,
     required this.onOpenTask,
   });
 
   final DateTime date;
   final List<_CalendarTask> tasks;
+  final List<WorkspaceMember> members;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
@@ -436,7 +445,7 @@ class _AgendaDay extends StatelessWidget {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(radiusMd),
         border: Border.all(color: plannerBorder),
       ),
       child: Column(
@@ -452,7 +461,11 @@ class _AgendaDay extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           for (final entry in tasks) ...[
-            _AgendaTaskCard(entry: entry, onOpenTask: onOpenTask),
+            _AgendaTaskCard(
+              entry: entry,
+              members: members,
+              onOpenTask: onOpenTask,
+            ),
             if (entry != tasks.last) const SizedBox(height: 8),
           ],
         ],
@@ -512,25 +525,33 @@ class _CalendarTaskChip extends StatelessWidget {
 }
 
 class _AgendaTaskCard extends StatelessWidget {
-  const _AgendaTaskCard({required this.entry, required this.onOpenTask});
+  const _AgendaTaskCard({
+    required this.entry,
+    required this.members,
+    required this.onOpenTask,
+  });
 
   final _CalendarTask entry;
+  final List<WorkspaceMember> members;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
     final color = statusColor(task.status);
+    final assignee = members
+        .where((member) => member.profile.id == task.assigneeId)
+        .firstOrNull;
     return Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () => onOpenTask(entry),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(radiusMd),
         child: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: Colors.white,
-            borderRadius: BorderRadius.circular(6),
+            borderRadius: BorderRadius.circular(radiusSm),
             border: Border.all(color: plannerBorder),
           ),
           child: Row(
@@ -570,7 +591,10 @@ class _AgendaTaskCard extends StatelessWidget {
                   ],
                 ),
               ),
-              OwnerAvatar(label: task.owner),
+              if (assignee != null)
+                UserAvatar(profile: assignee.profile, size: 26)
+              else
+                OwnerAvatar(label: task.owner),
             ],
           ),
         ),
@@ -582,22 +606,26 @@ class _AgendaTaskCard extends StatelessWidget {
 class _TaskDetailsDialog extends StatelessWidget {
   const _TaskDetailsDialog({
     required this.entry,
+    required this.members,
     required this.onEditTask,
     required this.onDeleteTask,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
   });
 
   final _CalendarTask entry;
+  final List<WorkspaceMember> members;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
     final statusTone = statusColor(task.status);
     final progressPercent = (task.progress * 100).round();
+    final assignee = members
+        .where((member) => member.profile.id == task.assigneeId)
+        .firstOrNull;
 
     return Dialog(
       insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
@@ -655,7 +683,7 @@ class _TaskDetailsDialog extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  NoteButton(task: task, onNotesChanged: onNotesChanged),
+                  NoteButton(task: task, onOpenNotes: onOpenNotes),
                   IconButton(
                     tooltip: 'Close',
                     onPressed: () => Navigator.of(context).pop(),
@@ -705,15 +733,32 @@ class _TaskDetailsDialog extends StatelessWidget {
                   ),
                   _DetailRow(
                     label: 'Owner',
-                    child: Text(task.owner, style: _detailValueStyle),
+                    child: assignee == null
+                        ? Text(task.owner, style: _detailValueStyle)
+                        : Row(
+                            children: [
+                              UserAvatar(profile: assignee.profile, size: 20),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  assignee.profile.displayName,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: _detailValueStyle,
+                                ),
+                              ),
+                            ],
+                          ),
                   ),
                   _DetailRow(
                     label: 'Due date',
-                    child: Text(task.dueDate, style: _detailValueStyle),
+                    child: _DateText(date: task.dueDate),
                   ),
                   _DetailRow(
                     label: 'Timeline',
-                    child: Text(task.timeline, style: _detailValueStyle),
+                    child: _TimelineText(
+                      start: task.startDate,
+                      end: task.endDate,
+                    ),
                   ),
                   _DetailRow(
                     label: 'Progress',
@@ -737,39 +782,18 @@ class _TaskDetailsDialog extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (task.notes.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Notes (${task.notes.length})',
-                        style: const TextStyle(
-                          color: plannerMuted,
-                          fontSize: 12.5,
-                        ),
-                      ),
+                  _DetailRow(
+                    label: 'Notes',
+                    child: Text(
+                      task.noteCount == 0
+                          ? 'No notes'
+                          : '${task.noteCount} '
+                                '${task.noteCount == 1 ? 'note' : 'notes'}',
+                      style: task.noteCount == 0
+                          ? _detailPlaceholderStyle
+                          : _detailValueStyle,
                     ),
-                    const SizedBox(height: 6),
-                    for (final note in task.notes)
-                      Container(
-                        width: double.infinity,
-                        margin: const EdgeInsets.only(bottom: 6),
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFFEF9C3),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: const Color(0xFFFDE68A)),
-                        ),
-                        child: Text(
-                          notePlainText(note),
-                          style: const TextStyle(
-                            color: Color(0xFF422006),
-                            fontSize: 13,
-                            height: 1.45,
-                          ),
-                        ),
-                      ),
-                  ],
+                  ),
                 ],
               ),
             ),
@@ -817,6 +841,59 @@ const TextStyle _detailValueStyle = TextStyle(
   fontSize: 13,
   fontWeight: FontWeight.w500,
 );
+
+const TextStyle _detailPlaceholderStyle = TextStyle(
+  color: plannerFaint,
+  fontSize: 13,
+  fontWeight: FontWeight.w500,
+);
+
+/// A single date, or a muted placeholder when it is unset.
+class _DateText extends StatelessWidget {
+  const _DateText({required this.date});
+
+  final DateTime? date;
+
+  @override
+  Widget build(BuildContext context) {
+    final value = date;
+    return Text(
+      value == null ? 'No date' : formatDate(value),
+      style: value == null ? _detailPlaceholderStyle : _detailValueStyle,
+    );
+  }
+}
+
+/// "12 Mar – 20 Mar", falling back to whichever end is set.
+class _TimelineText extends StatelessWidget {
+  const _TimelineText({required this.start, required this.end});
+
+  final DateTime? start;
+  final DateTime? end;
+
+  @override
+  Widget build(BuildContext context) {
+    final from = start;
+    final to = end;
+    final String label;
+    if (from == null && to == null) {
+      label = 'No timeline';
+    } else if (from != null && to != null) {
+      label = '${formatDate(from)} – ${formatDate(to)}';
+    } else if (from != null) {
+      label = 'From ${formatDate(from)}';
+    } else {
+      label = 'Until ${formatDate(to!)}';
+    }
+    return Text(
+      label,
+      overflow: TextOverflow.ellipsis,
+      style: from == null && to == null
+          ? _detailPlaceholderStyle
+          : _detailValueStyle,
+    );
+  }
+}
 
 class _DetailRow extends StatelessWidget {
   const _DetailRow({required this.label, required this.child});
@@ -917,7 +994,7 @@ List<_CalendarTask> _calendarTasks(List<TaskGroup> groups) {
   final entries = <_CalendarTask>[];
   for (final group in groups) {
     for (final task in group.tasks) {
-      final date = _parseTaskDate(task.dueDate);
+      final date = task.dueDate;
       if (date != null) {
         entries.add(_CalendarTask(task: task, group: group, date: date));
       }
@@ -945,26 +1022,6 @@ List<DateTime> _visibleDays(DateTime month) {
 
 bool _sameDate(DateTime a, DateTime b) {
   return a.year == b.year && a.month == b.month && a.day == b.day;
-}
-
-DateTime? _parseTaskDate(String value) {
-  if (value == 'No date') {
-    return null;
-  }
-
-  final parts = value.trim().split(' ');
-  if (parts.length != 2) {
-    return null;
-  }
-
-  final month = _monthNames.indexOf(parts.first) + 1;
-  final day = int.tryParse(parts.last);
-  if (month <= 0 || day == null) {
-    return null;
-  }
-
-  final now = DateTime.now();
-  return DateTime(now.year, month, day);
 }
 
 const _monthNames = [

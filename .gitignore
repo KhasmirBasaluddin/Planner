@@ -51,3 +51,11 @@ database/
 # Local development database
 database/
 
+
+# Environment / secrets
+# Keep credentials out of version control. `.env.example` documents the shape
+# and IS committed; `.env` holds real values and must not be.
+.env
+.env.local
+.env.*.local
+dart_defines.json

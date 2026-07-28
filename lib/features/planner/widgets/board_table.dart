@@ -11,6 +11,7 @@ class BoardTable extends StatefulWidget {
   const BoardTable({
     super.key,
     required this.groups,
+    required this.members,
     required this.collapsedGroupIds,
     required this.onToggleGroup,
     required this.onRenameGroup,
@@ -19,25 +20,23 @@ class BoardTable extends StatefulWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
     this.onTaskReorder,
-    this.onPinTaskToNotes,
   });
 
   final List<TaskGroup> groups;
-  final Set<int> collapsedGroupIds;
+  final List<WorkspaceMember> members;
+  final Set<String> collapsedGroupIds;
   final ValueChanged<TaskGroup> onToggleGroup;
   final ValueChanged<TaskGroup> onRenameGroup;
   final ValueChanged<TaskGroup> onDeleteGroup;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -67,7 +66,7 @@ class _BoardTableState extends State<BoardTable> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final horizontalPadding = constraints.maxWidth < 720 ? 16.0 : 24.0;
+        final horizontalPadding = constraints.maxWidth < 720 ? 16.0 : 28.0;
         final availableWidth = constraints.maxWidth - horizontalPadding * 2;
         final tableWidth = availableWidth < _minTableWidth
             ? _minTableWidth
@@ -80,9 +79,9 @@ class _BoardTableState extends State<BoardTable> {
             controller: _verticalController,
             padding: EdgeInsets.fromLTRB(
               horizontalPadding,
-              16,
+              20,
               horizontalPadding,
-              36,
+              40,
             ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -102,10 +101,9 @@ class _BoardTableState extends State<BoardTable> {
                         onDelete: () => widget.onDeleteGroup(group),
                         onEditTask: widget.onEditTask,
                         onDeleteTask: widget.onDeleteTask,
-                        onPinTaskToNotes: widget.onPinTaskToNotes,
                         onStatusChanged: widget.onStatusChanged,
                         onProgressChanged: widget.onProgressChanged,
-                        onNotesChanged: widget.onNotesChanged,
+                        onOpenNotes: widget.onOpenNotes,
                         onTaskReorder: widget.onTaskReorder,
                       ),
                       const SizedBox(height: 22),
@@ -191,9 +189,8 @@ class GroupSection extends StatelessWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
     this.onTaskReorder,
-    this.onPinTaskToNotes,
   });
 
   final TaskGroup group;
@@ -203,13 +200,11 @@ class GroupSection extends StatelessWidget {
   final VoidCallback onDelete;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -311,10 +306,9 @@ class GroupSection extends StatelessWidget {
                       groupColor: group.color,
                       onEditTask: onEditTask,
                       onDeleteTask: onDeleteTask,
-                      onPinTaskToNotes: onPinTaskToNotes,
                       onStatusChanged: onStatusChanged,
                       onProgressChanged: onProgressChanged,
-                      onNotesChanged: onNotesChanged,
+                      onOpenNotes: onOpenNotes,
                       dragEnabled: onTaskReorder != null,
                     ),
                 ],
@@ -358,9 +352,8 @@ class TaskRow extends StatelessWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onNotesChanged,
+    required this.onOpenNotes,
     required this.dragEnabled,
-    this.onPinTaskToNotes,
   });
 
   final PlannerTask task;
@@ -368,13 +361,11 @@ class TaskRow extends StatelessWidget {
   final Color groupColor;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final Future<void> Function(PlannerTask task, List<String> notes)
-  onNotesChanged;
+  final ValueChanged<PlannerTask> onOpenNotes;
   final bool dragEnabled;
 
   @override
@@ -413,7 +404,7 @@ class TaskRow extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  NoteButton(task: task, onNotesChanged: onNotesChanged),
+                  NoteButton(task: task, onOpenNotes: onOpenNotes),
                   const SizedBox(width: 4),
                 ],
               ),
@@ -441,11 +432,7 @@ class TaskRow extends StatelessWidget {
             flex: 9,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text(
-                task.dueDate,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(color: plannerText, fontSize: 13),
-              ),
+              child: DueDateCell(task: task),
             ),
           ),
           Expanded(
@@ -470,9 +457,6 @@ class TaskRow extends StatelessWidget {
                   tooltip: 'Task actions',
                   onEdit: () => onEditTask(task),
                   onDelete: () => onDeleteTask(task),
-                  onSendToNotes: onPinTaskToNotes == null
-                      ? null
-                      : () => onPinTaskToNotes!(task),
                   editLabel: 'Edit task',
                   deleteLabel: 'Delete task',
                 ),
@@ -663,9 +647,14 @@ class TimelineCell extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  task.timeline,
+                  _timelineLabel(task),
                   overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: plannerMuted, fontSize: 12),
+                  style: TextStyle(
+                    color: task.startDate == null && task.endDate == null
+                        ? plannerFaint
+                        : plannerMuted,
+                    fontSize: 12,
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -900,7 +889,6 @@ class _ActionsMenu extends StatelessWidget {
     required this.onDelete,
     required this.editLabel,
     required this.deleteLabel,
-    this.onSendToNotes,
   });
 
   final String tooltip;
@@ -909,21 +897,16 @@ class _ActionsMenu extends StatelessWidget {
   final String editLabel;
   final String deleteLabel;
 
-  /// Task rows only: pins the task to the Notes canvas as a sticky note.
-  final VoidCallback? onSendToNotes;
-
   @override
   Widget build(BuildContext context) {
     return PopupMenuButton<_TableAction>(
       tooltip: tooltip,
       offset: const Offset(0, 32),
+      constraints: const BoxConstraints(minWidth: 190, maxWidth: 260),
       onSelected: (action) {
         switch (action) {
           case _TableAction.edit:
             onEdit();
-            break;
-          case _TableAction.sendToNotes:
-            onSendToNotes?.call();
             break;
           case _TableAction.delete:
             onDelete();
@@ -936,15 +919,6 @@ class _ActionsMenu extends StatelessWidget {
           height: 38,
           child: _ActionMenuLabel(icon: Icons.edit_outlined, label: editLabel),
         ),
-        if (onSendToNotes != null)
-          const PopupMenuItem(
-            value: _TableAction.sendToNotes,
-            height: 38,
-            child: _ActionMenuLabel(
-              icon: Icons.push_pin_outlined,
-              label: 'Pin to Notes',
-            ),
-          ),
         PopupMenuItem(
           value: _TableAction.delete,
           height: 38,
@@ -964,7 +938,7 @@ class _ActionsMenu extends StatelessWidget {
   }
 }
 
-enum _TableAction { edit, sendToNotes, delete }
+enum _TableAction { edit, delete }
 
 class _ActionMenuLabel extends StatelessWidget {
   const _ActionMenuLabel({
@@ -995,4 +969,75 @@ class _ActionMenuLabel extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The due-date cell. Typed dates let us flag overdue and due-today work,
+/// which the old display-string storage could not support.
+class DueDateCell extends StatelessWidget {
+  const DueDateCell({super.key, required this.task});
+
+  final PlannerTask task;
+
+  @override
+  Widget build(BuildContext context) {
+    final due = task.dueDate;
+    if (due == null) {
+      return const Text(
+        'No date',
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(color: plannerFaint, fontSize: 13),
+      );
+    }
+
+    final overdue = task.isOverdue;
+    final today = task.isDueToday && task.status != TaskStatus.done;
+    final color = overdue
+        ? plannerRed
+        : (today ? plannerOrange : plannerText);
+
+    return Row(
+      children: [
+        if (overdue || today) ...[
+          Icon(
+            overdue
+                ? Icons.error_outline_rounded
+                : Icons.today_rounded,
+            size: 13,
+            color: color,
+          ),
+          const SizedBox(width: 5),
+        ],
+        Flexible(
+          child: Text(
+            today ? 'Today' : formatDate(due),
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: color,
+              fontSize: 13,
+              fontWeight: overdue || today
+                  ? FontWeight.w600
+                  : FontWeight.w400,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Renders a task's start/end pair, degrading gracefully when only one end is
+/// set.
+String _timelineLabel(PlannerTask task) {
+  final start = task.startDate;
+  final end = task.endDate;
+  if (start == null && end == null) {
+    return 'Unscheduled';
+  }
+  if (start != null && end != null) {
+    return '${formatDate(start)} – ${formatDate(end)}';
+  }
+  if (start != null) {
+    return 'From ${formatDate(start)}';
+  }
+  return 'Until ${formatDate(end!)}';
 }
