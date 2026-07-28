@@ -28,6 +28,24 @@ create table if not exists public.profiles (
   created_at  timestamptz not null default now()
 );
 
+-- Preserve historical data while enforcing the limit for all future profile
+-- inserts and updates.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_full_name_length'
+      and conrelid = 'public.profiles'::regclass
+  ) then
+    alter table public.profiles
+      add constraint profiles_full_name_length
+      check (char_length(trim(full_name)) <= 60)
+      not valid;
+  end if;
+end
+$$;
+
 -- Keep profiles in sync with auth.users automatically.
 create or replace function public.handle_new_user()
 returns trigger
@@ -40,7 +58,10 @@ begin
   values (
     new.id,
     new.email,
-    coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1))
+    left(
+      coalesce(new.raw_user_meta_data->>'full_name', split_part(new.email, '@', 1)),
+      60
+    )
   )
   on conflict (id) do nothing;
   return new;
@@ -61,17 +82,30 @@ language plpgsql
 as $$
 declare
   email text := lower(trim(event->'user'->>'email'));
+  full_name text := trim(coalesce(
+    event->'user'->'user_metadata'->>'full_name',
+    ''
+  ));
 begin
-  if email ~ '^[^@]+@vintazk\.com$' then
-    return '{}'::jsonb;
+  if email !~ '^[^@]+@vintazk\.com$' then
+    return jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 403,
+        'message', 'Only @vintazk.com email addresses are allowed.'
+      )
+    );
   end if;
 
-  return jsonb_build_object(
-    'error', jsonb_build_object(
-      'http_code', 403,
-      'message', 'Only @vintazk.com email addresses are allowed.'
-    )
-  );
+  if char_length(full_name) > 60 then
+    return jsonb_build_object(
+      'error', jsonb_build_object(
+        'http_code', 400,
+        'message', 'Full name must be 60 characters or fewer.'
+      )
+    );
+  end if;
+
+  return '{}'::jsonb;
 end;
 $$;
 

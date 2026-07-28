@@ -8,6 +8,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 const String kAppScheme = 'planner';
 const String kAuthCallbackUrl = '$kAppScheme://auth-callback';
 const String kAllowedEmailDomain = 'vintazk.com';
+const int kMaxFullNameLength = 60;
+const int kMaxPasswordLength = 72;
 
 bool isAllowedCompanyEmail(String email) {
   final normalized = email.trim().toLowerCase();
@@ -22,6 +24,29 @@ void requireAllowedCompanyEmail(String email) {
     throw const AuthException(
       'Only @vintazk.com email addresses are allowed.',
       statusCode: '403',
+    );
+  }
+}
+
+bool isValidFullName(String fullName) {
+  final normalized = fullName.trim();
+  return normalized.isNotEmpty && normalized.length <= kMaxFullNameLength;
+}
+
+void requireValidFullName(String fullName) {
+  if (!isValidFullName(fullName)) {
+    throw const AuthException(
+      'Full name must be between 1 and 60 characters.',
+      statusCode: '400',
+    );
+  }
+}
+
+void requireValidPasswordLength(String password) {
+  if (password.length > kMaxPasswordLength) {
+    throw const AuthException(
+      'Password must be 72 characters or fewer.',
+      statusCode: '400',
     );
   }
 }
@@ -81,6 +106,8 @@ class AuthService {
     required String fullName,
   }) {
     requireAllowedCompanyEmail(email);
+    requireValidFullName(fullName);
+    requireValidPasswordLength(password);
     return _auth.signUp(
       email: email.trim(),
       password: password,

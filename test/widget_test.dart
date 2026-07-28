@@ -19,6 +19,34 @@ void main() {
     });
   });
 
+  group('Full name policy', () {
+    test('accepts names up to 60 characters', () {
+      expect(isValidFullName('Alex Rivera'), isTrue);
+      expect(isValidFullName('A' * kMaxFullNameLength), isTrue);
+    });
+
+    test('rejects blank and overlong names', () {
+      expect(isValidFullName('   '), isFalse);
+      expect(isValidFullName('A' * (kMaxFullNameLength + 1)), isFalse);
+    });
+  });
+
+  group('Password length policy', () {
+    test('accepts passwords up to Supabase maximum', () {
+      expect(
+        () => requireValidPasswordLength('A' * kMaxPasswordLength),
+        returnsNormally,
+      );
+    });
+
+    test('rejects passwords over Supabase maximum', () {
+      expect(
+        () => requireValidPasswordLength('A' * (kMaxPasswordLength + 1)),
+        throwsA(isA<Exception>()),
+      );
+    });
+  });
+
   group('UserProfile', () {
     test('falls back to the email local-part when no name is set', () {
       const profile = UserProfile(

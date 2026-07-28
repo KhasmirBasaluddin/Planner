@@ -284,10 +284,15 @@ class _LoginPageState extends State<LoginPage> {
             TextFormField(
               controller: _nameController,
               textInputAction: TextInputAction.next,
+              maxLength: kMaxFullNameLength,
               decoration: const InputDecoration(hintText: 'Juan Dela Cruz'),
               validator: (value) {
-                if ((value ?? '').trim().isEmpty) {
+                final name = (value ?? '').trim();
+                if (name.isEmpty) {
                   return 'Tell us what to call you.';
+                }
+                if (name.length > kMaxFullNameLength) {
+                  return 'Use $kMaxFullNameLength characters or fewer.';
                 }
                 return null;
               },
@@ -323,6 +328,7 @@ class _LoginPageState extends State<LoginPage> {
             TextFormField(
               controller: _passwordController,
               obscureText: _obscure,
+              maxLength: isSignUp ? kMaxPasswordLength : null,
               autofillHints: [
                 isSignUp ? AutofillHints.newPassword : AutofillHints.password,
               ],
@@ -348,6 +354,9 @@ class _LoginPageState extends State<LoginPage> {
                 final password = value ?? '';
                 if (password.isEmpty) {
                   return 'Enter your password.';
+                }
+                if (isSignUp && password.length > kMaxPasswordLength) {
+                  return 'Use $kMaxPasswordLength characters or fewer.';
                 }
                 if (isSignUp && !_PasswordCheck.of(password).isValid) {
                   return 'Use at least 8 characters, with a letter and a '
@@ -385,6 +394,7 @@ class _LoginPageState extends State<LoginPage> {
               TextFormField(
                 controller: _confirmController,
                 obscureText: _obscure,
+                maxLength: kMaxPasswordLength,
                 autofillHints: const [AutofillHints.newPassword],
                 onFieldSubmitted: (_) => _busy ? null : _submit(),
                 decoration: const InputDecoration(hintText: 'Type it again'),
