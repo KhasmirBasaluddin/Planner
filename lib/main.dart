@@ -14,6 +14,9 @@ import 'shared/utils/planner_colors.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Makes confirmation links work for both installed and portable ZIP builds.
+  await ensureWindowsProtocolRegistration();
+
   // Credentials come from the gitignored .env file (or --dart-define in CI).
   await SupabaseConfig.load();
 
@@ -26,6 +29,10 @@ Future<void> main() async {
       await Supabase.initialize(
         url: SupabaseConfig.url,
         publishableKey: SupabaseConfig.anonKey,
+        // Planner owns Windows deep-link handling below. Leaving Supabase
+        // Flutter's observer enabled would exchange the same one-time PKCE
+        // code twice when app_links delivers the callback.
+        authOptions: const FlutterAuthClientOptions(detectSessionInUri: false),
       );
       initialized = true;
     } catch (error) {
@@ -84,6 +91,18 @@ class _AuthGateState extends State<_AuthGate> with WidgetsBindingObserver {
     // login screen for the app — so clicking the link in an email signs you
     // straight in rather than returning you to a password prompt.
     _deepLinks = DeepLinkHandler(_auth)
+      ..onSuccess = () {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              const SnackBar(
+                backgroundColor: plannerGreen,
+                content: Text('Email confirmed. You are now signed in.'),
+              ),
+            );
+        }
+      }
       ..onError = (message) {
         if (mounted) {
           ScaffoldMessenger.of(context)

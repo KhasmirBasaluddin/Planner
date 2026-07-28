@@ -19,6 +19,40 @@ void main() {
     });
   });
 
+  group('Auth callback URLs', () {
+    test('accepts Planner PKCE and implicit callbacks', () {
+      expect(
+        isPlannerAuthCallback(
+          Uri.parse('planner://auth-callback?code=one-time-code'),
+        ),
+        isTrue,
+      );
+      expect(
+        isPlannerAuthCallback(
+          Uri.parse('planner://auth-callback#access_token=token'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('rejects unrelated and malformed Planner URLs', () {
+      expect(
+        isPlannerAuthCallback(
+          Uri.parse('https://example.com/auth-callback?code=code'),
+        ),
+        isFalse,
+      );
+      expect(
+        isPlannerAuthCallback(Uri.parse('planner://something-else?code=code')),
+        isFalse,
+      );
+      expect(
+        isPlannerAuthCallback(Uri.parse('planner://auth-callback')),
+        isFalse,
+      );
+    });
+  });
+
   group('Full name policy', () {
     test('accepts names up to 60 characters', () {
       expect(isValidFullName('Alex Rivera'), isTrue);

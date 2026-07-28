@@ -1,15 +1,71 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:app_links/app_links.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// The custom URL scheme Windows hands back to the app after a browser
-/// redirect. Registered by [DeepLinkHandler.registerWindowsScheme].
+/// redirect. The installer registers it for the current Windows user.
 const String kAppScheme = 'planner';
 const String kAuthCallbackUrl = '$kAppScheme://auth-callback';
 const String kAllowedEmailDomain = 'vintazk.com';
 const int kMaxFullNameLength = 60;
 const int kMaxPasswordLength = 72;
+
+/// Points the `planner://` scheme at the currently running executable.
+///
+/// The portable ZIP can be extracted anywhere, so an installer cannot know its
+/// final path. Refreshing this per-user registration on launch also keeps links
+/// working after the extracted folder is moved.
+Future<void> ensureWindowsProtocolRegistration() async {
+  if (!Platform.isWindows) {
+    return;
+  }
+
+  final executable = Platform.resolvedExecutable;
+  const root = r'HKCU\Software\Classes\planner';
+  final values = <List<String>>[
+    ['add', root, '/ve', '/d', 'URL:Planner Protocol', '/f'],
+    ['add', root, '/v', 'URL Protocol', '/d', '', '/f'],
+    ['add', '$root\\DefaultIcon', '/ve', '/d', '"$executable",0', '/f'],
+    [
+      'add',
+      '$root\\shell\\open\\command',
+      '/ve',
+      '/d',
+      '"$executable" "%1"',
+      '/f',
+    ],
+  ];
+
+  try {
+    for (final arguments in values) {
+      final result = await Process.run('reg.exe', arguments, runInShell: false);
+      if (result.exitCode != 0) {
+        return;
+      }
+    }
+  } catch (_) {
+    // A locked-down Windows policy may reject registry writes. The app still
+    // works normally; only opening confirmation links from email is affected.
+  }
+}
+
+bool isPlannerAuthCallback(Uri uri) {
+  if (uri.scheme.toLowerCase() != kAppScheme ||
+      uri.host.toLowerCase() != 'auth-callback') {
+    return false;
+  }
+  final fragment = Uri.splitQueryString(uri.fragment);
+  return uri.queryParameters.containsKey('code') ||
+      uri.queryParameters.containsKey('error') ||
+      uri.queryParameters.containsKey('error_code') ||
+      uri.queryParameters.containsKey('error_description') ||
+      fragment.containsKey('access_token') ||
+      fragment.containsKey('error') ||
+      fragment.containsKey('error_code') ||
+      fragment.containsKey('error_description');
+}
 
 bool isAllowedCompanyEmail(String email) {
   final normalized = email.trim().toLowerCase();
@@ -126,20 +182,11 @@ class AuthService {
 
   Future<void> signOut() => _auth.signOut();
 
-  /// Exchanges a callback URL for a session. Handles both shapes Supabase uses:
-  /// PKCE (`?code=`) and the implicit flow (`#access_token=`).
+  /// Exchanges a callback URL for a session. Supabase handles both PKCE
+  /// (`?code=`) and implicit (`#access_token=`) callbacks here, including
+  /// propagating errors returned in the callback.
   Future<void> completeSessionFromUrl(Uri uri) async {
-    final code = uri.queryParameters['code'];
-    if (code != null) {
-      await _auth.exchangeCodeForSession(code);
-      return;
-    }
-
-    // Implicit flow puts the tokens in the fragment, which
-    // getSessionFromUrl parses for us.
-    if (uri.fragment.contains('access_token')) {
-      await _auth.getSessionFromUrl(uri);
-    }
+    await _auth.getSessionFromUrl(uri);
   }
 
   /// Turns invitations addressed to this user's email into memberships. Safe to
@@ -169,35 +216,41 @@ class DeepLinkHandler {
   final AuthService _auth;
   final AppLinks _appLinks = AppLinks();
   StreamSubscription<Uri>? _subscription;
+  String? _handledCallback;
 
   /// Called with a human-readable message when a callback fails, so the UI can
   /// surface it instead of appearing to hang.
   void Function(String message)? onError;
 
-  Future<void> start() async {
-    // A link that launched the app arrives here rather than on the stream.
-    try {
-      final initial = await _appLinks.getInitialLink();
-      if (initial != null) {
-        await _handle(initial);
-      }
-    } catch (_) {
-      // No initial link is the normal case.
-    }
+  /// Called after the callback creates a session.
+  void Function()? onSuccess;
 
+  void start() {
+    // app_links includes the cold-start link in this stream on Windows. Using
+    // getInitialLink as well can deliver and exchange the same PKCE code twice.
     _subscription = _appLinks.uriLinkStream.listen(
-      _handle,
+      (uri) => unawaited(_handle(uri)),
       onError: (Object error) => onError?.call(error.toString()),
     );
   }
 
   Future<void> _handle(Uri uri) async {
-    if (uri.scheme != kAppScheme) {
+    if (!isPlannerAuthCallback(uri)) {
       return;
     }
+
+    // A one-time auth code must never be exchanged twice. Windows or an email
+    // client can occasionally deliver the same activation more than once.
+    final callback = uri.toString();
+    if (_handledCallback == callback) {
+      return;
+    }
+    _handledCallback = callback;
+
     try {
       await _auth.completeSessionFromUrl(uri);
       await _auth.acceptPendingInvites();
+      onSuccess?.call();
     } catch (error) {
       onError?.call(describeAuthError(error));
     }
@@ -232,8 +285,11 @@ String describeAuthError(Object error) {
     if (message.contains('provider is not enabled')) {
       return 'That sign-in method is not enabled for this project yet.';
     }
-    if (message.contains('code verifier') || message.contains('pkce')) {
-      return 'That sign-in link has expired. Try signing in again.';
+    if (message.contains('code verifier') ||
+        message.contains('pkce') ||
+        message.contains('flow state')) {
+      return 'That confirmation link has expired or was already used. '
+          'Try signing in, or request a new link.';
     }
     return error.message;
   }

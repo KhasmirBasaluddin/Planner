@@ -101,16 +101,27 @@ Confirmation and password-reset links redirect to `planner://auth-callback`, so
 that clicking one opens the app already signed in rather than returning you to a
 password prompt. Windows needs to know which program owns that scheme:
 
+In Supabase, first open **Authentication -> URL Configuration** and add this
+exact value under **Redirect URLs**:
+
+```
+planner://auth-callback
+```
+
 ```powershell
 .\tools\register_url_scheme.ps1
 ```
+
+The packaged app refreshes this registration automatically when it launches.
+That makes the portable ZIP self-configuring after extraction and keeps links
+working if its folder is moved. The script remains useful for debug builds.
 
 Writes to `HKCU`, so no administrator rights are needed. Without it the browser
 reports "no app is associated with this link" and the confirmation appears to do
 nothing.
 
-Re-run it if you move or reinstall the app — the registry stores an absolute
-path, and a stale one fails silently. Undo with `-Remove`.
+For debug builds, re-run the script after moving the executable. Undo the
+manual registration with `-Remove`.
 
 ## 5. Run
 
