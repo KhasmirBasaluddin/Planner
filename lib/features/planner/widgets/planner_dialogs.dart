@@ -207,6 +207,9 @@ const Color _stickyBody = Color(0xFFFEF9C3);
 const Color _stickyHeader = Color(0xFFFDE047);
 
 /// Builds a Quill document from a stored note (Delta JSON, or legacy plain text).
+/// Shared with the sticky-note canvas, which stores bodies in the same format.
+Document docFromNote(String note) => _docFromNote(note);
+
 Document _docFromNote(String note) {
   if (note.trim().isEmpty) {
     return Document();

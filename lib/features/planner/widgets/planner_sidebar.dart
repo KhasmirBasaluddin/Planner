@@ -9,7 +9,10 @@ class PlannerSidebar extends StatelessWidget {
     required this.boards,
     required this.selectedBoardIndex,
     required this.compact,
+    required this.view,
+    required this.noteCount,
     required this.onBoardSelected,
+    required this.onNotesSelected,
     required this.onCreateBoard,
     required this.onRenameBoard,
     required this.onDeleteBoard,
@@ -18,7 +21,10 @@ class PlannerSidebar extends StatelessWidget {
   final List<Board> boards;
   final int selectedBoardIndex;
   final bool compact;
+  final WorkspaceView view;
+  final int noteCount;
   final ValueChanged<int> onBoardSelected;
+  final VoidCallback onNotesSelected;
   final VoidCallback onCreateBoard;
   final ValueChanged<Board> onRenameBoard;
   final ValueChanged<Board> onDeleteBoard;
@@ -61,7 +67,9 @@ class PlannerSidebar extends StatelessWidget {
                   final board = boards[index];
                   return _BoardNavItem(
                     board: board,
-                    selected: selectedBoardIndex == index,
+                    selected:
+                        view == WorkspaceView.board &&
+                        selectedBoardIndex == index,
                     compact: compact,
                     onTap: () => onBoardSelected(index),
                     onRename: () => onRenameBoard(board),
@@ -70,8 +78,96 @@ class PlannerSidebar extends StatelessWidget {
                 },
               ),
             ),
+            // Notes sit below the board list, separated as a distinct
+            // destination rather than another workspace.
+            Divider(
+              color: Colors.white.withValues(alpha: 0.1),
+              height: 24,
+            ),
+            _NotesNavItem(
+              selected: view == WorkspaceView.notes,
+              compact: compact,
+              noteCount: noteCount,
+              onTap: onNotesSelected,
+            ),
+            const SizedBox(height: 12),
             _CreateBoardButton(compact: compact, onPressed: onCreateBoard),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _NotesNavItem extends StatelessWidget {
+  const _NotesNavItem({
+    required this.selected,
+    required this.compact,
+    required this.noteCount,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final bool compact;
+  final int noteCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: compact ? 'Notes' : '',
+      child: Material(
+        color: selected
+            ? Colors.white.withValues(alpha: 0.12)
+            : Colors.transparent,
+        borderRadius: BorderRadius.circular(8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: onTap,
+          child: Container(
+            height: 44,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 0 : 12),
+            child: Row(
+              mainAxisAlignment: compact
+                  ? MainAxisAlignment.center
+                  : MainAxisAlignment.start,
+              children: [
+                Icon(
+                  selected
+                      ? Icons.sticky_note_2_rounded
+                      : Icons.sticky_note_2_outlined,
+                  size: 17,
+                  color: selected ? noteYellow : const Color(0xFF9EA4C4),
+                ),
+                if (!compact) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Notes',
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: selected
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.85),
+                        fontSize: 13,
+                        fontWeight: selected
+                            ? FontWeight.w600
+                            : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                  if (noteCount > 0)
+                    Text(
+                      '$noteCount',
+                      style: const TextStyle(
+                        color: Color(0xFF9EA4C4),
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
         ),
       ),
     );

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/drift/app_database.dart' show AppDatabase;
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
+import '../notes/notes_canvas_page.dart';
 import 'widgets/board_calendar.dart';
 import 'widgets/board_header.dart';
 import 'widgets/board_kanban.dart';
@@ -28,6 +29,8 @@ class _PlannerPageState extends State<PlannerPage> {
   String _query = '';
   ViewMode _mode = ViewMode.table;
   TaskOrder _taskOrder = TaskOrder.manual;
+  WorkspaceView _view = WorkspaceView.board;
+  int _noteCount = 0;
   bool _loading = true;
   String? _error;
 
@@ -130,11 +133,13 @@ class _PlannerPageState extends State<PlannerPage> {
   Future<void> _loadBoards() async {
     try {
       final boards = await widget.database.loadBoards();
+      final noteCount = (await widget.database.loadStickyNotes()).length;
       if (!mounted) {
         return;
       }
       setState(() {
         _boards = boards;
+        _noteCount = noteCount;
         _selectedBoardIndex = _selectedBoardIndex.clamp(
           0,
           boards.isEmpty ? 0 : boards.length - 1,
@@ -478,6 +483,43 @@ class _PlannerPageState extends State<PlannerPage> {
     }, failureMessage: 'Could not save the notes.');
   }
 
+  /// Creates a sticky note on the Notes canvas seeded from a task, keeping a
+  /// link back to it.
+  Future<void> _pinTaskToNotes(PlannerTask task) async {
+    // Spread pinned notes over a loose grid so several never land on top of
+    // each other.
+    final slot = _noteCount;
+    final x = 80.0 + (slot % 5) * 290.0;
+    final y = 80.0 + (slot ~/ 5) * 270.0;
+
+    final ok = await _guard(() async {
+      await widget.database.createStickyNote(
+        x: x,
+        y: y,
+        color: notePalette[slot % notePalette.length],
+        title: task.title,
+        taskId: task.id,
+      );
+      await _loadBoards();
+    }, failureMessage: 'Could not pin the task to Notes.');
+
+    if (!ok || !mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Pinned "${task.title}" to Notes'),
+          action: SnackBarAction(
+            label: 'View',
+            onPressed: () => setState(() => _view = WorkspaceView.notes),
+          ),
+        ),
+      );
+  }
+
   void _toggleGroup(TaskGroup group) {
     setState(() {
       if (_collapsedGroupIds.contains(group.id)) {
@@ -502,48 +544,69 @@ class _PlannerPageState extends State<PlannerPage> {
                 boards: _boards,
                 selectedBoardIndex: _selectedBoardIndex,
                 compact: compactSidebar,
+                view: _view,
+                noteCount: _noteCount,
                 onCreateBoard: _createBoard,
                 onRenameBoard: _renameBoard,
                 onDeleteBoard: _deleteBoard,
+                onNotesSelected: () {
+                  setState(() => _view = WorkspaceView.notes);
+                },
                 onBoardSelected: (index) {
                   setState(() {
+                    _view = WorkspaceView.board;
                     _selectedBoardIndex = index;
                     _query = '';
                     _searchController.clear();
                   });
                 },
               ),
-              Expanded(
-                child: _PlannerContent(
-                  loading: _loading,
-                  error: _error,
-                  board: board,
-                  groups: _visibleGroups,
-                  collapsedGroupIds: _collapsedGroupIds,
-                  mode: _mode,
-                  searchController: _searchController,
-                  query: _query,
-                  onSearchChanged: (value) => setState(() => _query = value),
-                  onModeChanged: (mode) => setState(() => _mode = mode),
-                  taskOrder: _taskOrder,
-                  onTaskOrderChanged: (order) =>
-                      setState(() => _taskOrder = order),
-                  onCreateBoard: _createBoard,
-                  onRenameBoard: _renameBoard,
-                  onDeleteBoard: _deleteBoard,
-                  onAddGroup: _addGroup,
-                  onRenameGroup: _renameGroup,
-                  onDeleteGroup: _deleteGroup,
-                  onToggleGroup: _toggleGroup,
-                  onAddTask: _addTask,
-                  onEditTask: _editTask,
-                  onDeleteTask: _deleteTask,
-                  onStatusChanged: _changeStatus,
-                  onProgressChanged: _changeProgress,
-                  onNotesChanged: _changeNotes,
-                  onTaskReorder: _reorderTask,
+              if (_view == WorkspaceView.notes)
+                Expanded(
+                  child: NotesCanvasPage(
+                    database: widget.database,
+                    // Keep the sidebar badge accurate as notes are added or
+                    // removed on the canvas.
+                    onNotesChanged: (count) {
+                      if (mounted && count != _noteCount) {
+                        setState(() => _noteCount = count);
+                      }
+                    },
+                  ),
+                )
+              else
+                Expanded(
+                  child: _PlannerContent(
+                    loading: _loading,
+                    error: _error,
+                    board: board,
+                    groups: _visibleGroups,
+                    collapsedGroupIds: _collapsedGroupIds,
+                    mode: _mode,
+                    searchController: _searchController,
+                    query: _query,
+                    onSearchChanged: (value) => setState(() => _query = value),
+                    onModeChanged: (mode) => setState(() => _mode = mode),
+                    taskOrder: _taskOrder,
+                    onTaskOrderChanged: (order) =>
+                        setState(() => _taskOrder = order),
+                    onCreateBoard: _createBoard,
+                    onRenameBoard: _renameBoard,
+                    onDeleteBoard: _deleteBoard,
+                    onAddGroup: _addGroup,
+                    onRenameGroup: _renameGroup,
+                    onDeleteGroup: _deleteGroup,
+                    onToggleGroup: _toggleGroup,
+                    onAddTask: _addTask,
+                    onEditTask: _editTask,
+                    onDeleteTask: _deleteTask,
+                    onStatusChanged: _changeStatus,
+                    onProgressChanged: _changeProgress,
+                    onNotesChanged: _changeNotes,
+                    onTaskReorder: _reorderTask,
+                    onPinTaskToNotes: _pinTaskToNotes,
+                  ),
                 ),
-              ),
             ],
           );
         },
@@ -580,6 +643,7 @@ class _PlannerContent extends StatelessWidget {
     required this.onProgressChanged,
     required this.onNotesChanged,
     required this.onTaskReorder,
+    required this.onPinTaskToNotes,
   });
 
   final bool loading;
@@ -612,6 +676,7 @@ class _PlannerContent extends StatelessWidget {
   onNotesChanged;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
+  final ValueChanged<PlannerTask> onPinTaskToNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -674,6 +739,7 @@ class _PlannerContent extends StatelessWidget {
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
                 onNotesChanged: onNotesChanged,
+                onPinTaskToNotes: onPinTaskToNotes,
                 onTaskReorder: taskOrder == TaskOrder.manual
                     ? onTaskReorder
                     : null,

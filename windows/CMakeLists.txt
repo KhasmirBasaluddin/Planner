@@ -32,6 +32,14 @@ set(CMAKE_CXX_FLAGS_PROFILE "${CMAKE_CXX_FLAGS_RELEASE}")
 # Use Unicode for all projects.
 add_definitions(-DUNICODE -D_UNICODE)
 
+# MSVC 14.50+ (Visual Studio 2026) compiles source files in parallel, and
+# without /FS they race writing the shared per-target PDB, failing with
+# "error C1041: cannot open program database". Applies to plugin targets too,
+# which is where the failure surfaces (e.g. url_launcher_windows).
+if(MSVC)
+  add_compile_options(/FS)
+endif()
+
 # Compilation settings that should be applied to most targets.
 #
 # Be cautious about adding new options here, as plugins use this function by

@@ -21,6 +21,7 @@ class BoardTable extends StatefulWidget {
     required this.onProgressChanged,
     required this.onNotesChanged,
     this.onTaskReorder,
+    this.onPinTaskToNotes,
   });
 
   final List<TaskGroup> groups;
@@ -30,6 +31,7 @@ class BoardTable extends StatefulWidget {
   final ValueChanged<TaskGroup> onDeleteGroup;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
+  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
@@ -100,6 +102,7 @@ class _BoardTableState extends State<BoardTable> {
                         onDelete: () => widget.onDeleteGroup(group),
                         onEditTask: widget.onEditTask,
                         onDeleteTask: widget.onDeleteTask,
+                        onPinTaskToNotes: widget.onPinTaskToNotes,
                         onStatusChanged: widget.onStatusChanged,
                         onProgressChanged: widget.onProgressChanged,
                         onNotesChanged: widget.onNotesChanged,
@@ -190,6 +193,7 @@ class GroupSection extends StatelessWidget {
     required this.onProgressChanged,
     required this.onNotesChanged,
     this.onTaskReorder,
+    this.onPinTaskToNotes,
   });
 
   final TaskGroup group;
@@ -199,6 +203,7 @@ class GroupSection extends StatelessWidget {
   final VoidCallback onDelete;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
+  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
@@ -306,6 +311,7 @@ class GroupSection extends StatelessWidget {
                       groupColor: group.color,
                       onEditTask: onEditTask,
                       onDeleteTask: onDeleteTask,
+                      onPinTaskToNotes: onPinTaskToNotes,
                       onStatusChanged: onStatusChanged,
                       onProgressChanged: onProgressChanged,
                       onNotesChanged: onNotesChanged,
@@ -354,6 +360,7 @@ class TaskRow extends StatelessWidget {
     required this.onProgressChanged,
     required this.onNotesChanged,
     required this.dragEnabled,
+    this.onPinTaskToNotes,
   });
 
   final PlannerTask task;
@@ -361,6 +368,7 @@ class TaskRow extends StatelessWidget {
   final Color groupColor;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
+  final ValueChanged<PlannerTask>? onPinTaskToNotes;
   final Future<void> Function(PlannerTask task, TaskStatus status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
@@ -462,6 +470,9 @@ class TaskRow extends StatelessWidget {
                   tooltip: 'Task actions',
                   onEdit: () => onEditTask(task),
                   onDelete: () => onDeleteTask(task),
+                  onSendToNotes: onPinTaskToNotes == null
+                      ? null
+                      : () => onPinTaskToNotes!(task),
                   editLabel: 'Edit task',
                   deleteLabel: 'Delete task',
                 ),
@@ -889,6 +900,7 @@ class _ActionsMenu extends StatelessWidget {
     required this.onDelete,
     required this.editLabel,
     required this.deleteLabel,
+    this.onSendToNotes,
   });
 
   final String tooltip;
@@ -896,6 +908,9 @@ class _ActionsMenu extends StatelessWidget {
   final VoidCallback onDelete;
   final String editLabel;
   final String deleteLabel;
+
+  /// Task rows only: pins the task to the Notes canvas as a sticky note.
+  final VoidCallback? onSendToNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -906,6 +921,9 @@ class _ActionsMenu extends StatelessWidget {
         switch (action) {
           case _TableAction.edit:
             onEdit();
+            break;
+          case _TableAction.sendToNotes:
+            onSendToNotes?.call();
             break;
           case _TableAction.delete:
             onDelete();
@@ -918,6 +936,15 @@ class _ActionsMenu extends StatelessWidget {
           height: 38,
           child: _ActionMenuLabel(icon: Icons.edit_outlined, label: editLabel),
         ),
+        if (onSendToNotes != null)
+          const PopupMenuItem(
+            value: _TableAction.sendToNotes,
+            height: 38,
+            child: _ActionMenuLabel(
+              icon: Icons.push_pin_outlined,
+              label: 'Pin to Notes',
+            ),
+          ),
         PopupMenuItem(
           value: _TableAction.delete,
           height: 38,
@@ -937,7 +964,7 @@ class _ActionsMenu extends StatelessWidget {
   }
 }
 
-enum _TableAction { edit, delete }
+enum _TableAction { edit, sendToNotes, delete }
 
 class _ActionMenuLabel extends StatelessWidget {
   const _ActionMenuLabel({

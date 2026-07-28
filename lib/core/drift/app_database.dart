@@ -41,12 +41,37 @@ class PlannerTasks extends Table {
   TextColumn get notes => text().withDefault(const Constant(''))();
 }
 
-@DriftDatabase(tables: [Boards, TaskGroups, PlannerTasks])
+/// Free-floating notes on the sticky board. Position and size are persisted so
+/// the canvas looks exactly as the user left it.
+@DataClassName('StickyNoteRow')
+class StickyNotes extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get title => text().withDefault(const Constant(''))();
+
+  /// Quill Delta JSON, matching the format used by task notes.
+  TextColumn get body => text().withDefault(const Constant(''))();
+  IntColumn get color => integer()();
+  RealColumn get x => real()();
+  RealColumn get y => real()();
+  RealColumn get width => real().withDefault(const Constant(260))();
+  RealColumn get height => real().withDefault(const Constant(240))();
+
+  /// Draw order; the most recently touched note floats to the top.
+  IntColumn get z => integer().withDefault(const Constant(0))();
+  BoolColumn get pinned => boolean().withDefault(const Constant(false))();
+
+  /// Set when the note was created from a task, so the card can link back.
+  IntColumn get taskId => integer().nullable()();
+  DateTimeColumn get createdAt => dateTime()();
+  DateTimeColumn get updatedAt => dateTime()();
+}
+
+@DriftDatabase(tables: [Boards, TaskGroups, PlannerTasks, StickyNotes])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration {
@@ -55,6 +80,9 @@ class AppDatabase extends _$AppDatabase {
       onUpgrade: (migrator, from, to) async {
         if (from < 2) {
           await migrator.addColumn(plannerTasks, plannerTasks.notes);
+        }
+        if (from < 3) {
+          await migrator.createTable(stickyNotes);
         }
       },
     );
@@ -321,6 +349,137 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteTask(int taskId) async {
     await (delete(plannerTasks)..where((row) => row.id.equals(taskId))).go();
+  }
+
+  // === Sticky notes ===
+
+  Future<List<model.StickyNote>> loadStickyNotes() async {
+    final rows =
+        await (select(stickyNotes)..orderBy([
+              (row) => OrderingTerm.asc(row.z),
+              (row) => OrderingTerm.asc(row.id),
+            ]))
+            .get();
+    return rows.map(_stickyFromRow).toList();
+  }
+
+  Future<int> createStickyNote({
+    required double x,
+    required double y,
+    required Color color,
+    String title = '',
+    String body = '',
+    int? taskId,
+  }) async {
+    final now = DateTime.now();
+    final topZ = await _topStickyZ();
+    return into(stickyNotes).insert(
+      StickyNotesCompanion.insert(
+        title: Value(title.trim()),
+        body: Value(body),
+        color: color.toARGB32(),
+        x: x,
+        y: y,
+        z: Value(topZ + 1),
+        taskId: Value(taskId),
+        createdAt: now,
+        updatedAt: now,
+      ),
+    );
+  }
+
+  Future<void> updateStickyContent({
+    required int noteId,
+    required String title,
+    required String body,
+  }) async {
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(
+        title: Value(title.trim()),
+        body: Value(body),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  /// Persists a drag. Position only — deliberately does not bump [updatedAt],
+  /// since moving a note is not editing it.
+  Future<void> moveStickyNote({
+    required int noteId,
+    required double x,
+    required double y,
+  }) async {
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(x: Value(x), y: Value(y)),
+    );
+  }
+
+  Future<void> resizeStickyNote({
+    required int noteId,
+    required double width,
+    required double height,
+  }) async {
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(width: Value(width), height: Value(height)),
+    );
+  }
+
+  Future<void> updateStickyColor({
+    required int noteId,
+    required Color color,
+  }) async {
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(
+        color: Value(color.toARGB32()),
+        updatedAt: Value(DateTime.now()),
+      ),
+    );
+  }
+
+  Future<void> setStickyPinned({
+    required int noteId,
+    required bool pinned,
+  }) async {
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(pinned: Value(pinned)),
+    );
+  }
+
+  /// Raises a note above all others, so the one being touched is never buried.
+  Future<void> bringStickyToFront(int noteId) async {
+    final topZ = await _topStickyZ();
+    await (update(stickyNotes)..where((row) => row.id.equals(noteId))).write(
+      StickyNotesCompanion(z: Value(topZ + 1)),
+    );
+  }
+
+  Future<void> deleteStickyNote(int noteId) async {
+    await (delete(stickyNotes)..where((row) => row.id.equals(noteId))).go();
+  }
+
+  Future<int> _topStickyZ() async {
+    final rows = await (select(
+      stickyNotes,
+    )..orderBy([(row) => OrderingTerm.desc(row.z)])).get();
+    return rows.isEmpty ? 0 : rows.first.z;
+  }
+
+  model.StickyNote _stickyFromRow(StickyNoteRow row) {
+    return model.StickyNote(
+      id: row.id,
+      title: row.title,
+      body: row.body,
+      color: Color(row.color),
+      x: row.x,
+      y: row.y,
+      width: row.width,
+      height: row.height,
+      z: row.z,
+      pinned: row.pinned,
+      taskId: row.taskId,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    );
   }
 
   model.PlannerTask _taskFromRow(PlannerTaskRow row) {

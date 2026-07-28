@@ -19,6 +19,45 @@ const Color plannerBorder = Color(0xFFE1E4EE);
 const Color plannerSurface = Color(0xFFF6F7FB);
 const Color plannerSidebar = Color(0xFF181B34);
 
+/// Sticky-note paper tones. These are deliberately softer than the accent
+/// colors above: a note is a large filled surface with text on top, so it needs
+/// low saturation to stay readable.
+const Color noteYellow = Color(0xFFFFF3B0);
+const Color noteGreen = Color(0xFFD4F5DD);
+const Color noteBlue = Color(0xFFD6E9FF);
+const Color notePink = Color(0xFFFFDCE5);
+const Color notePurple = Color(0xFFE8DEFF);
+const Color noteOrange = Color(0xFFFFE0C7);
+const Color noteTeal = Color(0xFFCFF1EF);
+const Color noteGray = Color(0xFFE9ECF3);
+
+const List<Color> notePalette = [
+  noteYellow,
+  noteGreen,
+  noteBlue,
+  notePink,
+  notePurple,
+  noteOrange,
+  noteTeal,
+  noteGray,
+];
+
+/// The header band of a note: the same hue, a shade deeper, so the card reads
+/// as one object rather than two stacked rectangles.
+Color noteHeaderColor(Color base) {
+  final hsl = HSLColor.fromColor(base);
+  return hsl
+      .withSaturation((hsl.saturation * 1.08).clamp(0.0, 1.0))
+      .withLightness((hsl.lightness - 0.08).clamp(0.0, 1.0))
+      .toColor();
+}
+
+/// A border tone derived from the note color, for definition against the canvas.
+Color noteBorderColor(Color base) {
+  final hsl = HSLColor.fromColor(base);
+  return hsl.withLightness((hsl.lightness - 0.16).clamp(0.0, 1.0)).toColor();
+}
+
 Color statusColor(TaskStatus status) {
   return switch (status) {
     TaskStatus.done => plannerGreen,
