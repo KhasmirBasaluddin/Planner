@@ -58,4 +58,7 @@ database/
 .env
 .env.local
 .env.*.local
+
+# Locally packaged release artifacts are published through GitHub Releases.
+dist/
 dart_defines.json

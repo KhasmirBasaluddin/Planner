@@ -7,6 +7,24 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// redirect. Registered by [DeepLinkHandler.registerWindowsScheme].
 const String kAppScheme = 'planner';
 const String kAuthCallbackUrl = '$kAppScheme://auth-callback';
+const String kAllowedEmailDomain = 'vintazk.com';
+
+bool isAllowedCompanyEmail(String email) {
+  final normalized = email.trim().toLowerCase();
+  final parts = normalized.split('@');
+  return parts.length == 2 &&
+      parts.first.isNotEmpty &&
+      parts.last == kAllowedEmailDomain;
+}
+
+void requireAllowedCompanyEmail(String email) {
+  if (!isAllowedCompanyEmail(email)) {
+    throw const AuthException(
+      'Only @vintazk.com email addresses are allowed.',
+      statusCode: '403',
+    );
+  }
+}
 
 /// Sign-in, sign-up, and the session stream the route guard listens to.
 class AuthService {
@@ -33,6 +51,7 @@ class AuthService {
     required String password,
     bool staySignedIn = true,
   }) async {
+    requireAllowedCompanyEmail(email);
     final response = await _auth.signInWithPassword(
       email: email.trim(),
       password: password,
@@ -61,6 +80,7 @@ class AuthService {
     required String password,
     required String fullName,
   }) {
+    requireAllowedCompanyEmail(email);
     return _auth.signUp(
       email: email.trim(),
       password: password,
@@ -70,6 +90,7 @@ class AuthService {
   }
 
   Future<void> sendPasswordReset(String email) {
+    requireAllowedCompanyEmail(email);
     return _auth.resetPasswordForEmail(
       email.trim(),
       redirectTo: kAuthCallbackUrl,

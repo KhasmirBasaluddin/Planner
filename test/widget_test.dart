@@ -1,9 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:planner/core/supabase/auth_service.dart';
 import 'package:planner/models/planner_models.dart';
 import 'package:planner/shared/utils/planner_colors.dart';
 
 void main() {
+  group('Company email policy', () {
+    test('accepts the vintazk.com domain without case sensitivity', () {
+      expect(isAllowedCompanyEmail('person@vintazk.com'), isTrue);
+      expect(isAllowedCompanyEmail(' PERSON@VINTAZK.COM '), isTrue);
+    });
+
+    test('rejects other and lookalike domains', () {
+      expect(isAllowedCompanyEmail('person@gmail.com'), isFalse);
+      expect(isAllowedCompanyEmail('person@sub.vintazk.com'), isFalse);
+      expect(isAllowedCompanyEmail('person@vintazk.com.example'), isFalse);
+      expect(isAllowedCompanyEmail('@vintazk.com'), isFalse);
+    });
+  });
+
   group('UserProfile', () {
     test('falls back to the email local-part when no name is set', () {
       const profile = UserProfile(

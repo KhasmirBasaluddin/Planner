@@ -247,9 +247,10 @@ class _LoginPageState extends State<LoginPage> {
           const SizedBox(height: 8),
           Text(
             switch (_mode) {
-              _AuthMode.signIn => 'Sign in to pick up where your team left off.',
+              _AuthMode.signIn =>
+                'Sign in to pick up where your team left off.',
               _AuthMode.signUp =>
-                'Start organizing work with your team in minutes.',
+                'Use your @vintazk.com email to join your team.',
               _AuthMode.reset =>
                 'Enter your email and we will send you a reset link.',
             },
@@ -300,7 +301,7 @@ class _LoginPageState extends State<LoginPage> {
             keyboardType: TextInputType.emailAddress,
             autofillHints: const [AutofillHints.email],
             textInputAction: TextInputAction.next,
-            decoration: const InputDecoration(hintText: 'you@example.com'),
+            decoration: const InputDecoration(hintText: 'you@vintazk.com'),
             validator: (value) {
               final email = (value ?? '').trim();
               if (email.isEmpty) {
@@ -308,6 +309,9 @@ class _LoginPageState extends State<LoginPage> {
               }
               if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
                 return 'That does not look like an email address.';
+              }
+              if (!isAllowedCompanyEmail(email)) {
+                return 'Use your @vintazk.com email address.';
               }
               return null;
             },
@@ -337,7 +341,8 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
               onChanged: isSignUp
-                  ? (value) => setState(() {})  // refresh the strength meter
+                  ? (value) =>
+                        setState(() {}) // refresh the strength meter
                   : null,
               validator: (value) {
                 final password = value ?? '';
@@ -367,7 +372,9 @@ class _LoginPageState extends State<LoginPage> {
             // there is something to judge, so an empty form is not scolding.
             if (isSignUp && _passwordController.text.isNotEmpty) ...[
               const SizedBox(height: 8),
-              _StrengthMeter(check: _PasswordCheck.of(_passwordController.text)),
+              _StrengthMeter(
+                check: _PasswordCheck.of(_passwordController.text),
+              ),
             ],
 
             // Confirm field: catches the typo that would otherwise lock someone
@@ -380,9 +387,7 @@ class _LoginPageState extends State<LoginPage> {
                 obscureText: _obscure,
                 autofillHints: const [AutofillHints.newPassword],
                 onFieldSubmitted: (_) => _busy ? null : _submit(),
-                decoration: const InputDecoration(
-                  hintText: 'Type it again',
-                ),
+                decoration: const InputDecoration(hintText: 'Type it again'),
                 validator: (value) {
                   if ((value ?? '').isEmpty) {
                     return 'Confirm your password.';
@@ -421,13 +426,11 @@ class _LoginPageState extends State<LoginPage> {
                         color: Colors.white,
                       ),
                     )
-                  : Text(
-                      switch (_mode) {
-                        _AuthMode.signIn => 'Sign in',
-                        _AuthMode.signUp => 'Create account',
-                        _AuthMode.reset => 'Send reset link',
-                      },
-                    ),
+                  : Text(switch (_mode) {
+                      _AuthMode.signIn => 'Sign in',
+                      _AuthMode.signUp => 'Create account',
+                      _AuthMode.reset => 'Send reset link',
+                    }),
             ),
           ),
 
@@ -756,9 +759,7 @@ class _LiveRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 6),
       decoration: BoxDecoration(
         // A soft highlighter swipe over the line that just changed.
-        color: row.justChanged
-            ? const Color(0x33FFE082)
-            : Colors.transparent,
+        color: row.justChanged ? const Color(0x33FFE082) : Colors.transparent,
         borderRadius: BorderRadius.circular(3),
       ),
       child: Row(
@@ -1005,10 +1006,7 @@ class _ActivityLine extends StatelessWidget {
             const SizedBox(width: 8),
             Text(
               'just now',
-              style: GoogleFonts.caveat(
-                color: _paperInkFaint,
-                fontSize: 15,
-              ),
+              style: GoogleFonts.caveat(color: _paperInkFaint, fontSize: 15),
             ),
           ],
         ),
@@ -1031,6 +1029,7 @@ class _ActivityLine extends StatelessWidget {
 const Color _paper = Color(0xFFF4F1EA);
 const Color _paperRule = Color(0xFFE3DCCC);
 const Color _paperInk = Color(0xFF22211E);
+
 /// Ballpoint blue-black, for anything meant to read as handwritten.
 const Color _paperPen = Color(0xFF2A3358);
 const Color _paperInkSoft = Color(0xFF54504A);
@@ -1103,6 +1102,7 @@ class _PaperPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _PaperPainter oldDelegate) => false;
 }
+
 /// Three segments that fill as the password improves, with a word for what the
 /// bar means — a bar alone leaves people guessing what "enough" looks like.
 class _StrengthMeter extends StatelessWidget {

@@ -47,6 +47,31 @@ SUPABASE_ANON_KEY=eyJhbGciOi...
 
 `.env` is gitignored and will not be committed.
 
+## 3b. Restrict accounts to Vintazk email
+
+The desktop app only accepts `@vintazk.com` addresses. To enforce the same
+rule on the server, open **Authentication -> Hooks -> Before User Created**,
+choose **Postgres**, and select:
+
+```
+public.hook_allow_vintazk_email
+```
+
+That function is created by `supabase/schema.sql`. Once enabled, Supabase
+rejects every other domain before creating the user, even if someone bypasses
+the desktop app and calls the Auth API directly.
+
+## Desktop releases
+
+GitHub Actions builds both a Windows installer and portable ZIP for every
+version tag. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` under
+**Repository Settings -> Secrets and variables -> Actions**, then push a tag
+such as `v1.0.0`. The resulting GitHub Release contains:
+
+- `PlannerSetup-1.0.0.exe` — installer with Start Menu, optional desktop
+  shortcut, uninstall support, and the `planner://` URL scheme.
+- `Planner-Portable-1.0.0.zip` — unpack and run `planner.exe`.
+
 > **Which key?** Use the **anon / publishable** key. It is meant to ship inside
 > a client app — row level security is what actually protects your data.
 >

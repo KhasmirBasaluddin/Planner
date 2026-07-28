@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
@@ -130,9 +131,7 @@ class _MembersDialogState extends State<_MembersDialog> {
       if (mounted) {
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
-          ..showSnackBar(
-            SnackBar(content: Text('Invited $email')),
-          );
+          ..showSnackBar(SnackBar(content: Text('Invited $email')));
       }
     } catch (error) {
       if (mounted) {
@@ -299,7 +298,7 @@ class _MembersDialogState extends State<_MembersDialog> {
                 keyboardType: TextInputType.emailAddress,
                 onFieldSubmitted: (_) => _inviting ? null : _invite(),
                 decoration: const InputDecoration(
-                  hintText: 'teammate@company.com',
+                  hintText: 'teammate@vintazk.com',
                   prefixIcon: Icon(
                     Icons.mail_outline_rounded,
                     size: 17,
@@ -317,6 +316,9 @@ class _MembersDialogState extends State<_MembersDialog> {
                   }
                   if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
                     return 'That does not look like an email address.';
+                  }
+                  if (!isAllowedCompanyEmail(email)) {
+                    return 'Use an @vintazk.com email address.';
                   }
                   return null;
                 },
@@ -368,7 +370,11 @@ class _MembersDialogState extends State<_MembersDialog> {
         ),
         child: Row(
           children: [
-            const Icon(Icons.error_outline_rounded, size: 15, color: plannerRed),
+            const Icon(
+              Icons.error_outline_rounded,
+              size: 15,
+              color: plannerRed,
+            ),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -680,10 +686,7 @@ class _RolePicker extends StatelessWidget {
                         WorkspaceRole.member => 'Create and edit content',
                         WorkspaceRole.viewer => 'Read-only access',
                       },
-                      style: const TextStyle(
-                        color: plannerFaint,
-                        fontSize: 11,
-                      ),
+                      style: const TextStyle(color: plannerFaint, fontSize: 11),
                     ),
                   ],
                 ),

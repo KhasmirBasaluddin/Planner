@@ -52,6 +52,34 @@ create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
 
+-- Supabase Auth "Before User Created" hook. After running this schema, enable
+-- it under Authentication -> Hooks and select this Postgres function. It
+-- rejects non-company signups before an auth.users row is created.
+create or replace function public.hook_allow_vintazk_email(event jsonb)
+returns jsonb
+language plpgsql
+as $$
+declare
+  email text := lower(trim(event->'user'->>'email'));
+begin
+  if email ~ '^[^@]+@vintazk\.com$' then
+    return '{}'::jsonb;
+  end if;
+
+  return jsonb_build_object(
+    'error', jsonb_build_object(
+      'http_code', 403,
+      'message', 'Only @vintazk.com email addresses are allowed.'
+    )
+  );
+end;
+$$;
+
+grant execute on function public.hook_allow_vintazk_email(jsonb)
+  to supabase_auth_admin;
+revoke execute on function public.hook_allow_vintazk_email(jsonb)
+  from authenticated, anon, public;
+
 -- ---------------------------------------------------------------------------
 -- Workspaces and membership
 -- ---------------------------------------------------------------------------
@@ -181,6 +209,24 @@ create table if not exists public.workspace_invites (
   created_at   timestamptz    not null default now(),
   unique (workspace_id, email)
 );
+
+-- NOT VALID preserves any historical rows while enforcing the company domain
+-- for every new or updated invitation.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'workspace_invites_vintazk_email'
+      and conrelid = 'public.workspace_invites'::regclass
+  ) then
+    alter table public.workspace_invites
+      add constraint workspace_invites_vintazk_email
+      check (lower(split_part(trim(email), '@', 2)) = 'vintazk.com')
+      not valid;
+  end if;
+end
+$$;
 
 -- Set when the invited person turns the invitation down. Declining cannot
 -- delete the row: the delete policy requires workspace membership, which the

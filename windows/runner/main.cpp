@@ -12,7 +12,7 @@ namespace {
 
 // Must match the title passed to window.Create below — that is how a second
 // process locates the first one's window.
-constexpr wchar_t kWindowTitle[] = L"planner";
+constexpr wchar_t kWindowTitle[] = L"Planner";
 
 // Hands a `planner://` link to the already-running instance and brings it
 // forward, rather than starting a second copy of the app.
