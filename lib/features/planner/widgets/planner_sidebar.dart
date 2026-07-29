@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/utils/text_rules.dart';
 
 /// The left rail: workspace switcher at the top, boards in the middle, account
 /// controls at the bottom. Collapses to icons on narrow windows.
@@ -770,6 +771,9 @@ class _BoardSearchField extends StatelessWidget {
     return SizedBox(
       height: 32,
       child: TextField(
+        // Board names cannot contain emoji, so a search term with one in it
+        // would only ever return nothing.
+        inputFormatters: [emojiFreeFormatter],
         controller: controller,
         onChanged: onChanged,
         style: const TextStyle(color: Colors.white, fontSize: 12.5),

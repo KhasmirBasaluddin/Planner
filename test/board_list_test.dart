@@ -198,9 +198,7 @@ void main() {
     Future<void> openRowMenu(WidgetTester tester, {int rowIndex = 0}) async {
       final pointer = TestPointer(1, PointerDeviceKind.mouse);
       final trigger = find.byIcon(Icons.more_horiz_rounded).at(rowIndex);
-      await tester.sendEventToBinding(
-        pointer.hover(tester.getCenter(trigger)),
-      );
+      await tester.sendEventToBinding(pointer.hover(tester.getCenter(trigger)));
       await tester.pumpAndSettle();
 
       await tester.tap(trigger);

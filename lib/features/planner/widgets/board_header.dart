@@ -10,9 +10,6 @@ class BoardHeader extends StatelessWidget {
     required this.board,
     required this.members,
     required this.readOnly,
-    required this.searchController,
-    required this.query,
-    required this.onSearchChanged,
     required this.onAddTask,
     required this.onAddGroup,
     required this.onRenameBoard,
@@ -22,9 +19,6 @@ class BoardHeader extends StatelessWidget {
   final Board board;
   final List<WorkspaceMember> members;
   final bool readOnly;
-  final TextEditingController searchController;
-  final String query;
-  final ValueChanged<String> onSearchChanged;
   final VoidCallback onAddTask;
   final VoidCallback onAddGroup;
   final VoidCallback onRenameBoard;
@@ -137,14 +131,6 @@ class BoardHeader extends StatelessWidget {
                     ),
                     const SizedBox(width: 14),
                   ],
-                  SizedBox(
-                    width: tight ? 140 : (narrow ? 180 : 230),
-                    child: _SearchField(
-                      controller: searchController,
-                      query: query,
-                      onChanged: onSearchChanged,
-                    ),
-                  ),
                   if (!readOnly) ...[
                     const SizedBox(width: 8),
                     // Icon-only once labels no longer fit: two labelled buttons
@@ -285,10 +271,7 @@ class _StatusBreakdown extends StatelessWidget {
                   const SizedBox(width: 5),
                   Text(
                     '${counts[status.id]} ${status.name.toLowerCase()}',
-                    style: const TextStyle(
-                      color: plannerMuted,
-                      fontSize: 12,
-                    ),
+                    style: const TextStyle(color: plannerMuted, fontSize: 12),
                   ),
                 ],
               ),
@@ -325,57 +308,6 @@ class _ReadOnlyBadge extends StatelessWidget {
               ),
             ),
           ],
-        ),
-      ),
-    );
-  }
-}
-
-class _SearchField extends StatelessWidget {
-  const _SearchField({
-    required this.controller,
-    required this.query,
-    required this.onChanged,
-  });
-
-  final TextEditingController controller;
-  final String query;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      height: 36,
-      child: TextField(
-        controller: controller,
-        onChanged: onChanged,
-        style: const TextStyle(color: plannerInk, fontSize: 13),
-        decoration: InputDecoration(
-          fillColor: plannerSurface,
-          contentPadding: const EdgeInsets.symmetric(vertical: 8),
-          prefixIcon: const Icon(
-            Icons.search_rounded,
-            size: 17,
-            color: plannerFaint,
-          ),
-          prefixIconConstraints: const BoxConstraints(
-            minWidth: 34,
-            minHeight: 34,
-          ),
-          suffixIcon: query.isEmpty
-              ? null
-              : IconButton(
-                  onPressed: () {
-                    controller.clear();
-                    onChanged('');
-                  },
-                  icon: const Icon(
-                    Icons.close_rounded,
-                    size: 15,
-                    color: plannerFaint,
-                  ),
-                ),
-          hintText: 'Search tasks',
         ),
       ),
     );

@@ -7,6 +7,7 @@ import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
+import '../../shared/utils/text_rules.dart';
 import '../../shared/widgets/user_avatar.dart';
 import 'join_workspace_dialog.dart';
 
@@ -437,6 +438,9 @@ class _MembersDialogState extends State<_MembersDialog> {
               children: [
                 Expanded(
                   child: TextFormField(
+                    // A search term with an emoji in it can never match a
+                    // name or an email, neither of which may contain one.
+                    inputFormatters: [emojiFreeFormatter],
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
                     onChanged: _onSearchChanged,

@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 import '../../../core/supabase/planner_repository.dart';
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/utils/text_rules.dart';
 import '../../../shared/widgets/app_dialog.dart';
 import '../../../shared/widgets/user_avatar.dart';
 
@@ -23,13 +24,20 @@ import '../../../shared/widgets/user_avatar.dart';
 /// message is refused while it is being written rather than after Send.
 const int commentMaxLength = 5000;
 
+/// Deliberately *stricter* than the database.
+///
+/// 0002_core.sql allows 60 / 80 / 80 / 200 for these. Holding the client below
+/// that means the check constraint can never be the thing that rejects a name:
+/// the field stops accepting input first, with a counter, instead of the insert
+/// failing and surfacing a raw Postgres error. The looser server values stay as
+/// a backstop for anything not written by this app.
 class NameLimits {
   const NameLimits._();
 
-  static const int workspace = 40;
-  static const int board = 50;
-  static const int group = 40;
-  static const int task = 120;
+  static const int workspace = 40; // db allows 60
+  static const int board = 50; // db allows 80
+  static const int group = 40; // db allows 80
+  static const int task = 120; // db allows 200
 
   /// Returns an error message, or null when the name is acceptable.
   static String? validate(
@@ -44,7 +52,9 @@ class NameLimits {
     if (name.length > max) {
       return 'Keep it under $max characters (currently ${name.length}).';
     }
-    return null;
+    // Every board, group, task, and workspace name comes through here, so one
+    // check covers all of them. Chat is the exception and does not use this.
+    return validateNoEmoji(name, what: what);
   }
 }
 
@@ -199,6 +209,9 @@ class _NameDialogState extends State<_NameDialog> {
           TextField(
             controller: _controller,
             autofocus: true,
+            // NameLimits.validate also rejects emoji on submit; this stops one
+            // being typed in the first place, so the error never has to fire.
+            inputFormatters: [emojiFreeFormatter],
             // Hard stop at the limit, so the counter is a fact rather than a
             // warning the user can ignore.
             maxLength: widget.maxLength,
@@ -518,6 +531,7 @@ class _TaskDialogState extends State<_TaskDialog> {
           TextField(
             controller: _titleController,
             autofocus: true,
+            inputFormatters: [emojiFreeFormatter],
             maxLength: NameLimits.task,
             buildCounter:
                 (
@@ -1413,6 +1427,7 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
   final FocusNode _composerFocus = FocusNode();
 
   List<TaskComment> _comments = [];
+
   bool _loading = true;
   bool _sending = false;
   String? _error;
@@ -1429,6 +1444,9 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
 
   /// Whether `@everyone` is among the current suggestions.
   bool _showEveryone = false;
+
+  List<({TaskComment comment, TaskComment? parent})> get _timeline =>
+      buildTimeline(_comments);
 
   @override
   void initState() {
@@ -1695,6 +1713,10 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
 
   @override
   Widget build(BuildContext context) {
+    // Built once per frame: the getter sorts, so reading it inside itemBuilder
+    // would re-sort the whole conversation for every visible row.
+    final timeline = _timeline;
+
     return Dialog(
       backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 32),
@@ -1726,35 +1748,60 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
                     )
                   : _comments.isEmpty
                   ? const _ChatEmpty()
-                  : ListView.builder(
-                      controller: _scroll,
-                      padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-                      itemCount: _comments.length,
-                      itemBuilder: (context, index) {
-                        final comment = _comments[index];
-                        // A run by one person shows their name once. Three
-                        // identical bylines in a column was the list telling
-                        // you what you could already see.
-                        final previous = index > 0
-                            ? _comments[index - 1]
-                            : null;
-                        return _MessageThread(
-                          comment: comment,
-                          grouped:
-                              previous != null &&
-                              previous.replies.isEmpty &&
-                              previous.author?.id == comment.author?.id,
-                          members: widget.members,
-                          currentUserId: widget.currentUserId,
-                          onReply: () => _startReply(comment),
-                          onEdit: () => _startEditing(comment),
-                          onDelete: () => _delete(comment),
-                          onReact: (emoji) => _react(comment, emoji),
-                          onReplyEdit: _startEditing,
-                          onReplyDelete: _delete,
-                          onReplyReact: _react,
-                        );
-                      },
+                  : Align(
+                      // Bottom, so a short conversation grows up out of the
+                      // composer instead of hanging from the header.
+                      alignment: Alignment.bottomCenter,
+                      child: ListView.builder(
+                        controller: _scroll,
+                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                        // Messages stack up from the composer, the way every
+                        // chat does. Without this a conversation with two
+                        // messages in it pinned them to the top of the panel
+                        // with a field of empty white beneath, as far from the
+                        // box you type in as the layout allowed.
+                        //
+                        // This only affects the short case: once the messages
+                        // are taller than the viewport the alignment has nothing
+                        // left to give and the list scrolls normally.
+                        //
+                        // shrinkWrap lets the viewport size to its content so
+                        // there is slack for the alignment to consume; without
+                        // it the list always claims the full height and sits at
+                        // the top regardless.
+                        shrinkWrap: true,
+                        itemCount: timeline.length,
+                        itemBuilder: (context, index) {
+                          final entry = timeline[index];
+                          final comment = entry.comment;
+                          // A run by one person shows their name once. Three
+                          // identical bylines in a column was the list telling
+                          // you what you could already see. A reply always
+                          // breaks the run, because it carries a quote above it.
+                          final previous = index > 0
+                              ? timeline[index - 1]
+                              : null;
+                          return _MessageBubble(
+                            comment: comment,
+                            replyingTo: entry.parent,
+                            grouped:
+                                entry.parent == null &&
+                                previous != null &&
+                                previous.comment.author?.id ==
+                                    comment.author?.id,
+                            members: widget.members,
+                            currentUserId: widget.currentUserId,
+                            // Replies stay one deep: you answer the message,
+                            // not the answer.
+                            onReply: entry.parent == null
+                                ? () => _startReply(comment)
+                                : null,
+                            onEdit: () => _startEditing(comment),
+                            onDelete: () => _delete(comment),
+                            onReact: (emoji) => _react(comment, emoji),
+                          );
+                        },
+                      ),
                     ),
             ),
             if (_mentionMatches.isNotEmpty || _showEveryone)
@@ -1993,83 +2040,26 @@ class _ChatEmpty extends StatelessWidget {
   }
 }
 
-/// A top-level message and its replies, indented beneath it.
-class _MessageThread extends StatelessWidget {
-  const _MessageThread({
-    required this.comment,
-    this.grouped = false,
-    required this.members,
-    required this.currentUserId,
-    required this.onReply,
-    required this.onEdit,
-    required this.onDelete,
-    required this.onReact,
-    required this.onReplyEdit,
-    required this.onReplyDelete,
-    required this.onReplyReact,
-  });
-
-  final TaskComment comment;
-
-  /// True when the message above is from the same person, so this one skips
-  /// the avatar and byline.
-  final bool grouped;
-  final List<WorkspaceMember> members;
-  final String currentUserId;
-  final VoidCallback onReply;
-  final VoidCallback onEdit;
-  final VoidCallback onDelete;
-  final ValueChanged<String> onReact;
-  final ValueChanged<TaskComment> onReplyEdit;
-  final ValueChanged<TaskComment> onReplyDelete;
-  final void Function(TaskComment, String) onReplyReact;
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _MessageBubble(
-          comment: comment,
-          grouped: grouped,
-          members: members,
-          currentUserId: currentUserId,
-          onReply: onReply,
-          onEdit: onEdit,
-          onDelete: onDelete,
-          onReact: onReact,
-        ),
-        if (comment.hasReplies)
-          // Each reply quotes what it answers, rather than sitting under a
-          // shared rail. The rail only worked while every message was
-          // left-aligned: once your own replies moved right, it was a line
-          // orphaned on the far side of the panel pointing at nothing.
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              for (final (index, reply) in comment.replies.indexed)
-                _MessageBubble(
-                  // Only the first reply quotes the parent: repeating it
-                  // on every line in a run says the same thing twice.
-                  replyingTo: index == 0 ? comment : null,
-                  grouped:
-                      index > 0 &&
-                      comment.replies[index - 1].author?.id == reply.author?.id,
-                  comment: reply,
-                  members: members,
-                  currentUserId: currentUserId,
-                  compact: true,
-                  // A reply cannot be replied to: threads stay one deep.
-                  onReply: null,
-                  onEdit: () => onReplyEdit(reply),
-                  onDelete: () => onReplyDelete(reply),
-                  onReact: (emoji) => onReplyReact(reply, emoji),
-                ),
-            ],
-          ),
-      ],
-    );
+/// Flattens a threaded conversation into one strictly chronological list.
+///
+/// Replies used to render nested under their parent, which meant answering an
+/// old message dragged that whole thread down to the bottom — so a brand new
+/// message could appear *above* something older, which is not how any chat
+/// behaves. Messenger does not nest either: a reply sits at its own place in
+/// time and quotes what it answers. The quote carries the threading now, so the
+/// list can stay in the one order a conversation actually has.
+List<({TaskComment comment, TaskComment? parent})> buildTimeline(
+  List<TaskComment> comments,
+) {
+  final flat = <({TaskComment comment, TaskComment? parent})>[];
+  for (final comment in comments) {
+    flat.add((comment: comment, parent: null));
+    for (final reply in comment.replies) {
+      flat.add((comment: reply, parent: comment));
+    }
   }
+  flat.sort((a, b) => a.comment.createdAt.compareTo(b.comment.createdAt));
+  return flat;
 }
 
 /// Sets hover state without rebuilding mid-hit-test.
@@ -2122,7 +2112,6 @@ class _MessageBubble extends StatefulWidget {
     required this.onDelete,
     required this.onReact,
     this.onReply,
-    this.compact = false,
     this.grouped = false,
     this.replyingTo,
   });
@@ -2134,7 +2123,6 @@ class _MessageBubble extends StatefulWidget {
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final ValueChanged<String> onReact;
-  final bool compact;
 
   /// True when the message above is from the same person. Runs by one author
   /// show their avatar and name once rather than on every line.

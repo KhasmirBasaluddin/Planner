@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../models/board_filter.dart';
 import '../../models/planner_models.dart';
 
 /// All reads and writes for the planner. Row level security decides what the
@@ -11,6 +12,10 @@ class PlannerRepository {
   final SupabaseClient _client;
 
   String? get _uid => _client.auth.currentUser?.id;
+
+  /// The signed-in user, for callers that need to reason about ownership —
+  /// "my tasks" in the filter panel, for one.
+  String? get currentUserId => _uid;
 
   // === Workspaces ===
 
@@ -519,6 +524,170 @@ class PlannerRepository {
   /// come back together via [restoreBoard].
   Future<void> deleteBoard(String boardId) async {
     await _softDelete('boards', boardId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Saved filter views
+  //
+  // Backed by board_views, which already had a name, a jsonb config, and a
+  // created_by. Favorites are private: every query here is scoped to the
+  // signed-in user, and RLS enforces the same rule server-side.
+  // ---------------------------------------------------------------------------
+
+  /// The current user's saved views for [boardId], newest last.
+  Future<List<SavedView>> savedViews(String boardId) async {
+    final userId = _uid;
+    if (userId == null) {
+      return const [];
+    }
+    // Filtered on created_by even though board_views_select already hides other
+    // people's private views. Shared views written by an earlier build are
+    // still readable through that policy, and without this filter they would
+    // appear in a list the user cannot meaningfully own.
+    final rows = await _client
+        .from('board_views')
+        .select('id, board_id, name, config, created_at')
+        .eq('board_id', boardId)
+        .eq('created_by', userId)
+        .order('created_at');
+
+    return rows.map<SavedView>(SavedView.fromMap).toList();
+  }
+
+  /// Saves the active search under [name] and returns it with its new id.
+  Future<SavedView> saveView({
+    required String boardId,
+    required String workspaceId,
+    required String name,
+    required BoardSearch search,
+    bool isDefault = false,
+  }) async {
+    final userId = _uid;
+    if (userId == null) {
+      throw StateError('You must be signed in to save a view.');
+    }
+
+    // Clear the old default first. board_views_one_default_idx makes two
+    // defaults impossible, so without this the insert below fails outright
+    // rather than replacing what was there.
+    if (isDefault) {
+      await _clearDefaultView(boardId, userId);
+    }
+
+    final view = SavedView(
+      id: '',
+      boardId: boardId,
+      name: name.trim(),
+      search: search,
+      isDefault: isDefault,
+    );
+
+    final inserted = await _client
+        .from('board_views')
+        .insert({
+          'board_id': boardId,
+          'workspace_id': workspaceId,
+          'name': view.name,
+          'kind': 'table',
+          'config': view.toConfig(),
+          'is_shared': false,
+          'created_by': userId,
+        })
+        .select('id, board_id, name, config')
+        .single();
+
+    return SavedView.fromMap(inserted);
+  }
+
+  /// Renames a saved filter, replaces the search it holds, or changes its
+  /// default flag.
+  ///
+  /// Distinct from [updateView], which is the generic board_views editor: this
+  /// one round-trips through [SavedView] so the jsonb config keeps its shape,
+  /// and it enforces the one-default rule.
+  Future<void> updateSavedView({
+    required String viewId,
+    required String boardId,
+    String? name,
+    BoardSearch? search,
+    bool? isDefault,
+  }) async {
+    final userId = _uid;
+    if (userId == null) {
+      throw StateError('You must be signed in to change a view.');
+    }
+
+    final current = await _client
+        .from('board_views')
+        .select('id, board_id, name, config')
+        .eq('id', viewId)
+        .eq('created_by', userId)
+        .maybeSingle();
+
+    if (current == null) {
+      throw StateError('That view no longer exists.');
+    }
+
+    final existing = SavedView.fromMap(current);
+    final next = existing.copyWith(
+      name: name?.trim(),
+      search: search,
+      isDefault: isDefault,
+    );
+
+    if (isDefault == true && !existing.isDefault) {
+      await _clearDefaultView(boardId, userId);
+    }
+
+    final updated = await _client
+        .from('board_views')
+        .update({'name': next.name, 'config': next.toConfig()})
+        .eq('id', viewId)
+        .eq('created_by', userId)
+        .select('id');
+
+    // As with setBoardPinned: PostgREST reports success when RLS filtered every
+    // row away, so an update that changed nothing needs saying out loud.
+    if (updated.isEmpty) {
+      throw StateError('That view could not be updated.');
+    }
+  }
+
+  /// Deletes one of your own saved filters.
+  ///
+  /// Scoped to created_by, unlike [deleteView]: a favorite is personal, and
+  /// deleting by id alone would let a stale id from another board through.
+  Future<void> deleteSavedView(String viewId) async {
+    final userId = _uid;
+    if (userId == null) {
+      return;
+    }
+    await _client
+        .from('board_views')
+        .delete()
+        .eq('id', viewId)
+        .eq('created_by', userId);
+  }
+
+  /// Drops the default flag from whichever of this user's views holds it.
+  Future<void> _clearDefaultView(String boardId, String userId) async {
+    final rows = await _client
+        .from('board_views')
+        .select('id, board_id, name, config')
+        .eq('board_id', boardId)
+        .eq('created_by', userId);
+
+    for (final row in rows) {
+      final view = SavedView.fromMap(row);
+      if (!view.isDefault) {
+        continue;
+      }
+      await _client
+          .from('board_views')
+          .update({'config': view.copyWith(isDefault: false).toConfig()})
+          .eq('id', view.id)
+          .eq('created_by', userId);
+    }
   }
 
   Future<void> restoreBoard(String boardId) async {

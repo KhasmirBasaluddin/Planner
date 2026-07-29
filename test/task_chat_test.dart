@@ -308,4 +308,69 @@ void main() {
       expect(typical.length, lessThan(commentMaxLength));
     });
   });
+
+  // Ordering is the whole point of a chat log.
+  //
+  // Replies used to render nested under their parent, so answering an old
+  // message dragged that thread to the bottom and a brand new message could
+  // appear above something older.
+  group('buildTimeline', () {
+    TaskComment at(
+      String id,
+      int minute, {
+      List<TaskComment> replies = const [],
+    }) {
+      return TaskComment(
+        id: id,
+        taskId: 't1',
+        body: id,
+        createdAt: DateTime(2026, 7, 30, 9, minute),
+        author: alex,
+        replies: replies,
+      );
+    }
+
+    test('a reply sits at its own place in time, not under its parent', () {
+      // Chronologically: old(0), reply(5), newer(9).
+      final timeline = buildTimeline([
+        at('old', 0, replies: [at('reply', 5)]),
+        at('newer', 9),
+      ]);
+
+      expect(timeline.map((e) => e.comment.id).toList(), [
+        'old',
+        'reply',
+        'newer',
+      ]);
+    });
+
+    test('the newest message is always last', () {
+      // The reported bug: replying to an old message put the reply — and the
+      // whole thread — after a message that came later.
+      final timeline = buildTimeline([
+        at('first', 0, replies: [at('answer', 1)]),
+        at('latest', 30),
+      ]);
+
+      expect(timeline.last.comment.id, 'latest');
+    });
+
+    test('a reply remembers what it answers', () {
+      final parent = at('parent', 0, replies: [at('reply', 1)]);
+      final timeline = buildTimeline([parent]);
+
+      expect(timeline[0].parent, isNull);
+      expect(timeline[1].parent?.id, 'parent');
+    });
+
+    test('a conversation with no replies is left in order', () {
+      final timeline = buildTimeline([at('a', 0), at('b', 1), at('c', 2)]);
+      expect(timeline.map((e) => e.comment.id).toList(), ['a', 'b', 'c']);
+      expect(timeline.every((e) => e.parent == null), isTrue);
+    });
+
+    test('an empty conversation is empty', () {
+      expect(buildTimeline(const []), isEmpty);
+    });
+  });
 }

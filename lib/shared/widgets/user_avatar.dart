@@ -84,7 +84,9 @@ class AvatarStack extends StatelessWidget {
 
     return SizedBox(
       height: size,
-      width: size + (visible.length - 1) * (size - overlap) +
+      width:
+          size +
+          (visible.length - 1) * (size - overlap) +
           (overflow > 0 ? size - overlap : 0),
       child: Stack(
         children: [

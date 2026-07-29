@@ -5,7 +5,14 @@ import '../../../shared/utils/planner_colors.dart';
 import '../../../shared/widgets/user_avatar.dart';
 import 'planner_dialogs.dart';
 
-const double _minTableWidth = 760;
+/// Below this the table scrolls horizontally rather than compressing further.
+///
+/// Sized from the columns that hold real words. The flex weights total 99, so
+/// Status gets 13/99 of the width — at 760 that is ~100px, and a status like
+/// "Working on it" needs ~120 at 12px semibold before the label starts
+/// truncating. The cells ellipsize now either way, but a floor that truncates
+/// the default statuses on a maximised window is the wrong floor.
+const double _minTableWidth = 900;
 const double _rowHeight = 54;
 
 class BoardTable extends StatefulWidget {
@@ -542,11 +549,7 @@ class AssigneeAvatars extends StatelessWidget {
     if (profiles.isEmpty) {
       return _UnassignedAvatar(size: size);
     }
-    return AvatarStack(
-      profiles: profiles,
-      size: size,
-      maxVisible: maxVisible,
-    );
+    return AvatarStack(profiles: profiles, size: size, maxVisible: maxVisible);
   }
 }
 
@@ -641,18 +644,23 @@ class StatusMenu extends StatelessWidget {
               Container(
                 width: 7,
                 height: 7,
-                decoration: BoxDecoration(
-                  color: color,
-                  shape: BoxShape.circle,
-                ),
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
               ),
               const SizedBox(width: 6),
-              Text(
-                status?.name ?? 'No status',
-                style: TextStyle(
-                  color: Color.lerp(color, plannerInk, 0.25),
-                  fontWeight: FontWeight.w600,
-                  fontSize: 12,
+              // Flexible, so a long label ellipsizes instead of pushing the
+              // pill past its column. "Working on it" is wider than the status
+              // column at narrow window widths, and with a bare Text the Row
+              // simply overflowed and painted the stripe across the row.
+              Flexible(
+                child: Text(
+                  status?.name ?? 'No status',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: Color.lerp(color, plannerInk, 0.25),
+                    fontWeight: FontWeight.w600,
+                    fontSize: 12,
+                  ),
                 ),
               ),
             ],
@@ -685,12 +693,18 @@ class PriorityPill extends StatelessWidget {
           children: [
             Icon(Icons.flag_rounded, size: 11, color: color),
             const SizedBox(width: 5),
-            Text(
-              priority.label,
-              style: const TextStyle(
-                color: plannerText,
-                fontWeight: FontWeight.w500,
-                fontSize: 12,
+            // Same reason as the status pill: "Medium" and "Urgent" outgrow
+            // the priority column before the window gets especially narrow.
+            Flexible(
+              child: Text(
+                priority.label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  color: plannerText,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 12,
+                ),
               ),
             ),
           ],
@@ -791,8 +805,7 @@ class TimelineCell extends StatelessWidget {
   void _showProgressDialog(BuildContext context) async {
     final newProgress = await showDialog<double>(
       context: context,
-      builder: (context) =>
-          _ProgressDialog(currentProgress: task.progress),
+      builder: (context) => _ProgressDialog(currentProgress: task.progress),
     );
     if (newProgress != null) {
       onProgressChanged?.call(newProgress);
@@ -1074,17 +1087,13 @@ class DueDateCell extends StatelessWidget {
     final done = status?.isDone ?? false;
     final overdue = task.isOverdue(done: done);
     final today = task.isDueToday && !done;
-    final color = overdue
-        ? plannerRed
-        : (today ? plannerOrange : plannerText);
+    final color = overdue ? plannerRed : (today ? plannerOrange : plannerText);
 
     return Row(
       children: [
         if (overdue || today) ...[
           Icon(
-            overdue
-                ? Icons.error_outline_rounded
-                : Icons.today_rounded,
+            overdue ? Icons.error_outline_rounded : Icons.today_rounded,
             size: 13,
             color: color,
           ),
@@ -1097,9 +1106,7 @@ class DueDateCell extends StatelessWidget {
             style: TextStyle(
               color: color,
               fontSize: 13,
-              fontWeight: overdue || today
-                  ? FontWeight.w600
-                  : FontWeight.w400,
+              fontWeight: overdue || today ? FontWeight.w600 : FontWeight.w400,
             ),
           ),
         ),

@@ -247,15 +247,16 @@ class _KanbanColumn extends StatelessWidget {
                             builder: (context, constraints) {
                               return Draggable<PlannerTask>(
                                 data: entry.task,
-                                dragAnchorStrategy:
-                                    childDragAnchorStrategy,
+                                dragAnchorStrategy: childDragAnchorStrategy,
                                 feedback: SizedBox(
                                   width: constraints.maxWidth,
                                   child: Material(
                                     color: Colors.transparent,
                                     child: Container(
                                       decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(radiusSm),
+                                        borderRadius: BorderRadius.circular(
+                                          radiusSm,
+                                        ),
                                         boxShadow: const [
                                           BoxShadow(
                                             color: Color(0x1F101828),
@@ -400,11 +401,7 @@ class _KanbanCard extends StatelessWidget {
             const SizedBox(height: 10),
             Padding(
               padding: const EdgeInsets.only(right: 4),
-              child: _TaskMetaRow(
-                task: task,
-                status: status,
-                members: members,
-              ),
+              child: _TaskMetaRow(task: task, status: status, members: members),
             ),
             const SizedBox(height: 10),
             Padding(

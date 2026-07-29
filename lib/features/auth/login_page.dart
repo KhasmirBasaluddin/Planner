@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/supabase/auth_service.dart';
 import '../../shared/utils/planner_colors.dart';
+import '../../shared/utils/text_rules.dart';
 
 enum _AuthMode { signIn, signUp, reset }
 
@@ -121,9 +122,9 @@ class _LoginPageState extends State<LoginPage> {
             password: _passwordController.text,
             staySignedIn: _staySignedIn,
           );
-          // The auth state stream drives navigation; nothing to do here.
-          // Invitations are not claimed on sign-in — they wait in the
-          // notification centre for an explicit accept or decline.
+        // The auth state stream drives navigation; nothing to do here.
+        // Invitations are not claimed on sign-in — they wait in the
+        // notification centre for an explicit accept or decline.
 
         case _AuthMode.signUp:
           final response = await widget.auth.signUp(
@@ -284,6 +285,10 @@ class _LoginPageState extends State<LoginPage> {
               textInputAction: TextInputAction.next,
               maxLength: kMaxFullNameLength,
               decoration: const InputDecoration(hintText: 'Juan Dela Cruz'),
+              // Pasted emoji are dropped rather than rejected: the paste is
+              // usually a name with one stray character in it, and silently
+              // keeping the name beats refusing the whole thing.
+              inputFormatters: [emojiFreeFormatter],
               validator: (value) {
                 final name = (value ?? '').trim();
                 if (name.isEmpty) {
@@ -292,7 +297,7 @@ class _LoginPageState extends State<LoginPage> {
                 if (name.length > kMaxFullNameLength) {
                   return 'Use $kMaxFullNameLength characters or fewer.';
                 }
-                return null;
+                return validateNoEmoji(name, what: 'name');
               },
             ),
             const SizedBox(height: 16),
@@ -303,6 +308,7 @@ class _LoginPageState extends State<LoginPage> {
             controller: _emailController,
             keyboardType: TextInputType.emailAddress,
             autofillHints: const [AutofillHints.email],
+            inputFormatters: [emojiFreeFormatter],
             textInputAction: TextInputAction.next,
             decoration: const InputDecoration(hintText: 'you@vintazk.com'),
             validator: (value) {
@@ -312,6 +318,12 @@ class _LoginPageState extends State<LoginPage> {
               }
               if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
                 return 'That does not look like an email address.';
+              }
+              // The pattern above only excludes whitespace and stray @, so an
+              // address with an emoji in the local part slips through it.
+              final emojiError = validateNoEmoji(email, what: 'email address');
+              if (emojiError != null) {
+                return emojiError;
               }
               if (!isAllowedCompanyEmail(email)) {
                 return 'Use your @vintazk.com email address.';
@@ -355,6 +367,13 @@ class _LoginPageState extends State<LoginPage> {
                 }
                 if (isSignUp && password.length > kMaxPasswordLength) {
                   return 'Use $kMaxPasswordLength characters or fewer.';
+                }
+                // Signup only, and no formatter on this field. Someone whose
+                // existing password contains an emoji must still be able to
+                // type it to sign in — stripping it here would lock them out
+                // of their own account with no way to tell why.
+                if (isSignUp && containsEmoji(password)) {
+                  return 'Emoji are not allowed in a password.';
                 }
                 if (isSignUp && !_PasswordCheck.of(password).isValid) {
                   return 'Use at least 8 characters, with a letter and a '
@@ -403,7 +422,10 @@ class _LoginPageState extends State<LoginPage> {
                   if (value != _passwordController.text) {
                     return 'These passwords do not match.';
                   }
-                  return null;
+                  // Only reachable on signup, where the password field rejects
+                  // emoji too — but checked here as well so the two fields
+                  // cannot disagree about what a valid password is.
+                  return validateNoEmoji(value, what: 'password');
                 },
               ),
             ],

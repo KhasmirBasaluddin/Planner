@@ -94,7 +94,10 @@ void main() {
     testWidgets('with a feed only', (tester) async {
       await openPanel(
         tester,
-        notifications: [notification(id: 'n1'), notification(id: 'n2')],
+        notifications: [
+          notification(id: 'n1'),
+          notification(id: 'n2'),
+        ],
       );
       expect(find.text('TODAY'), findsOneWidget);
     });
@@ -112,8 +115,13 @@ void main() {
         ],
       );
 
-      for (final heading in ['TODAY', 'YESTERDAY', 'THIS WEEK', 'THIS MONTH',
-        'EARLIER']) {
+      for (final heading in [
+        'TODAY',
+        'YESTERDAY',
+        'THIS WEEK',
+        'THIS MONTH',
+        'EARLIER',
+      ]) {
         expect(find.text(heading), findsOneWidget, reason: heading);
       }
     });
@@ -121,9 +129,7 @@ void main() {
     testWidgets('with enough entries to scroll', (tester) async {
       await openPanel(
         tester,
-        notifications: [
-          for (var i = 0; i < 40; i++) notification(id: 'n$i'),
-        ],
+        notifications: [for (var i = 0; i < 40; i++) notification(id: 'n$i')],
       );
       // SingleChildScrollView rather than ListView: MenuAnchor measures its
       // children's intrinsic width, which a lazy viewport refuses to report.
@@ -235,7 +241,10 @@ void main() {
     ) async {
       await openPanel(
         tester,
-        notifications: [notification(id: 'n1'), notification(id: 'n2')],
+        notifications: [
+          notification(id: 'n1'),
+          notification(id: 'n2'),
+        ],
       );
       expect(find.text('2 new'), findsOneWidget);
       expect(find.text('Mark all read'), findsOneWidget);

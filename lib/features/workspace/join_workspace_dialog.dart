@@ -85,61 +85,68 @@ class _JoinWorkspaceDialogState extends State<_JoinWorkspaceDialog> {
           'can find it under Members & invites.',
       width: 440,
       content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: _controller,
-              focusNode: _focus,
-              autocorrect: false,
-              enableSuggestions: false,
-              textCapitalization: TextCapitalization.characters,
-              // Uppercase as they type: the codes are printed uppercase, and
-              // matching that avoids a "why isn't this working" moment even
-              // though the server accepts either case.
-              inputFormatters: [_UpperCaseFormatter()],
-              style: const TextStyle(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: _controller,
+            focusNode: _focus,
+            autocorrect: false,
+            enableSuggestions: false,
+            textCapitalization: TextCapitalization.characters,
+            // Uppercase as they type: the codes are printed uppercase, and
+            // matching that avoids a "why isn't this working" moment even
+            // though the server accepts either case.
+            // Restricted to the code alphabet rather than merely stripping
+            // emoji. generate_join_code() draws from ABCDEFGHJKLMNPQRSTUVWXYZ
+            // and 23456789 — no I, O, 0 or 1, which are the characters people
+            // misread — so anything outside that set cannot be part of a code.
+            inputFormatters: [
+              FilteringTextInputFormatter.allow(RegExp('[A-Za-z0-9-]')),
+              _UpperCaseFormatter(),
+            ],
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 1.6,
+            ),
+            decoration: const InputDecoration(
+              hintText: 'PLNR-XXXX-XXXX',
+              hintStyle: TextStyle(
+                color: plannerFaint,
                 fontSize: 17,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
                 letterSpacing: 1.6,
               ),
-              decoration: const InputDecoration(
-                hintText: 'PLNR-XXXX-XXXX',
-                hintStyle: TextStyle(
-                  color: plannerFaint,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 1.6,
-                ),
-              ),
-              onSubmitted: (_) => _joining ? null : _join(),
             ),
-            if (_error != null) ...[
-              const SizedBox(height: 12),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(
-                    Icons.error_outline_rounded,
-                    size: 15,
-                    color: plannerRed,
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(
-                        color: plannerRed,
-                        fontSize: 12.5,
-                        height: 1.45,
-                      ),
+            onSubmitted: (_) => _joining ? null : _join(),
+          ),
+          if (_error != null) ...[
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.error_outline_rounded,
+                  size: 15,
+                  color: plannerRed,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _error!,
+                    style: const TextStyle(
+                      color: plannerRed,
+                      fontSize: 12.5,
+                      height: 1.45,
                     ),
                   ),
-                ],
-              ),
-            ],
+                ),
+              ],
+            ),
           ],
-        ),
+        ],
+      ),
       actions: [
         TextButton(
           onPressed: _joining ? null : () => Navigator.of(context).pop(),

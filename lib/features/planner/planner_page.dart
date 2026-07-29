@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 
 import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
+import '../../models/board_filter.dart';
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
 import '../workspace/join_workspace_dialog.dart';
@@ -19,11 +20,7 @@ import 'widgets/planner_dialogs.dart';
 import 'widgets/planner_sidebar.dart';
 
 class PlannerPage extends StatefulWidget {
-  const PlannerPage({
-    super.key,
-    required this.auth,
-    required this.repository,
-  });
+  const PlannerPage({super.key, required this.auth, required this.repository});
 
   final AuthService auth;
   final PlannerRepository repository;
@@ -41,7 +38,11 @@ class _PlannerPageState extends State<PlannerPage> {
   List<WorkspaceMember> _members = [];
   int _selectedWorkspaceIndex = 0;
   int _selectedBoardIndex = 0;
-  String _query = '';
+
+  /// The active filters and grouping. Replaces the bare _query string: the
+  /// text box is now one field on it rather than the whole search.
+  BoardSearch _search = const BoardSearch();
+  List<SavedView> _savedViews = const [];
   ViewMode _mode = ViewMode.table;
   TaskOrder _taskOrder = TaskOrder.manual;
   bool _loading = true;
@@ -57,7 +58,10 @@ class _PlannerPageState extends State<PlannerPage> {
     if (_workspaces.isEmpty) {
       return null;
     }
-    return _workspaces[_selectedWorkspaceIndex.clamp(0, _workspaces.length - 1)];
+    return _workspaces[_selectedWorkspaceIndex.clamp(
+      0,
+      _workspaces.length - 1,
+    )];
   }
 
   Board? get _selectedBoard {
@@ -69,32 +73,199 @@ class _PlannerPageState extends State<PlannerPage> {
 
   bool get _canEdit => _workspace?.role.canEdit ?? false;
 
+  /// The filters this board offers, resolved against its own status labels.
+  ///
+  /// Rebuilt per board because "Done" and "Stuck" are ids that differ between
+  /// boards; the filter *ids* stay stable so a saved favorite survives a
+  /// status being renamed.
+  List<BoardFilter> get _filters {
+    final board = _selectedBoard;
+    return filtersFor(
+      doneStatusIds: {
+        for (final status in board?.statuses ?? const <StatusLabel>[])
+          if (status.isDone) status.id,
+      },
+      stuckStatusIds: {
+        for (final status in board?.statuses ?? const <StatusLabel>[])
+          if (!status.isDone && status.name.toLowerCase().contains('stuck'))
+            status.id,
+      },
+    );
+  }
+
+  FilterContext get _filterContext {
+    final board = _selectedBoard;
+    final now = DateTime.now();
+    return FilterContext(
+      currentUserId: widget.repository.currentUserId ?? '',
+      // Midnight, so "overdue" means the day rolled over rather than the hour.
+      today: DateTime(now.year, now.month, now.day),
+      doneStatusIds: {
+        for (final status in board?.statuses ?? const <StatusLabel>[])
+          if (status.isDone) status.id,
+      },
+      stuckStatusIds: {
+        for (final status in board?.statuses ?? const <StatusLabel>[])
+          if (!status.isDone && status.name.toLowerCase().contains('stuck'))
+            status.id,
+      },
+    );
+  }
+
   List<TaskGroup> get _visibleGroups {
     final board = _selectedBoard;
     if (board == null) {
       return [];
     }
 
-    final query = _query.trim().toLowerCase();
-    return board.groups
-        .map((group) {
-          final tasks = query.isEmpty
-              ? group.tasks
-              : group.tasks
-                    .where((task) => task.title.toLowerCase().contains(query))
-                    .toList();
+    final context = _filterContext;
+    final filters = _filters;
 
-          return TaskGroup(
-            id: group.id,
-            boardId: group.boardId,
-            name: group.name,
-            color: group.color,
-            collapsed: group.collapsed,
-            tasks: _orderedTasks(tasks),
+    // Filter first, regroup second. Grouping a filtered set is cheap; filtering
+    // a regrouped one would have to walk the synthesised groups back to their
+    // tasks to know what survived.
+    final surviving = <PlannerTask>[
+      for (final group in board.groups)
+        for (final task in group.tasks)
+          if (_search.matches(task, context, filters)) task,
+    ];
+
+    if (_search.groupBy == GroupBy.none) {
+      // The board's own groups, with the tasks that survived.
+      final kept = surviving.map((task) => task.id).toSet();
+      return board.groups
+          .map(
+            (group) => TaskGroup(
+              id: group.id,
+              boardId: group.boardId,
+              name: group.name,
+              color: group.color,
+              collapsed: group.collapsed,
+              tasks: _orderedTasks(
+                group.tasks.where((task) => kept.contains(task.id)).toList(),
+              ),
+            ),
+          )
+          .where((group) => _search.isEmpty || group.tasks.isNotEmpty)
+          .toList();
+    }
+
+    return _regroup(surviving, board);
+  }
+
+  /// Buckets [tasks] by whatever Group By is set to.
+  ///
+  /// The buckets are synthetic TaskGroups so every view renders them without
+  /// knowing the difference — but their ids are prefixed, because a synthetic
+  /// group must never be mistaken for a real one by code that writes back
+  /// (reordering, renaming, deleting). Those actions are disabled while a
+  /// grouping is active for the same reason.
+  List<TaskGroup> _regroup(List<PlannerTask> tasks, Board board) {
+    final buckets = <String, List<PlannerTask>>{};
+    final labels = <String, String>{};
+    final colors = <String, Color>{};
+
+    void put(String key, String label, Color color, PlannerTask task) {
+      buckets.putIfAbsent(key, () => []).add(task);
+      labels[key] = label;
+      colors[key] = color;
+    }
+
+    for (final task in tasks) {
+      switch (_search.groupBy) {
+        case GroupBy.none:
+          break;
+        case GroupBy.status:
+          final status = board.statuses
+              .where((s) => s.id == task.statusId)
+              .firstOrNull;
+          put(
+            status?.id ?? '_none',
+            status?.name ?? 'No status',
+            status?.color ?? plannerSlate,
+            task,
           );
-        })
-        .where((group) => query.isEmpty || group.tasks.isNotEmpty)
-        .toList();
+        case GroupBy.assignee:
+          if (task.assigneeIds.isEmpty) {
+            put('_none', 'Unassigned', plannerSlate, task);
+          } else {
+            // A task with two assignees appears under both. Showing it once
+            // under an arbitrary "first" assignee would hide it from the other
+            // person's bucket, which is the one place they would look.
+            for (final id in task.assigneeIds) {
+              final member = _members
+                  .where((m) => m.profile.id == id)
+                  .firstOrNull;
+              put(
+                id,
+                member?.profile.displayName ?? 'Someone',
+                plannerBlue,
+                task,
+              );
+            }
+          }
+        case GroupBy.priority:
+          put(
+            task.priority.name,
+            task.priority.label,
+            priorityColor(task.priority),
+            task,
+          );
+        case GroupBy.dueDate:
+          final bucket = _dueBucket(task.dueDate);
+          put(bucket.$1, bucket.$2, bucket.$3, task);
+      }
+    }
+
+    final keys = buckets.keys.toList()..sort(_bucketOrder);
+    return [
+      for (final key in keys)
+        TaskGroup(
+          // Prefixed so nothing downstream treats it as a real group id.
+          id: 'group:$key',
+          boardId: board.id,
+          name: labels[key] ?? '',
+          color: colors[key] ?? plannerSlate,
+          collapsed: false,
+          tasks: _orderedTasks(buckets[key]!),
+        ),
+    ];
+  }
+
+  /// Which due-date bucket a date falls in.
+  (String, String, Color) _dueBucket(DateTime? due) {
+    if (due == null) {
+      return ('9_none', 'No due date', plannerSlate);
+    }
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(due.year, due.month, due.day);
+
+    if (day.isBefore(today)) {
+      return ('0_overdue', 'Overdue', plannerRed);
+    }
+    if (day == today) {
+      return ('1_today', 'Today', plannerOrange);
+    }
+    if (day.isBefore(today.add(const Duration(days: 7)))) {
+      return ('2_week', 'This week', plannerYellow);
+    }
+    return ('3_later', 'Later', plannerTeal);
+  }
+
+  /// Keeps buckets in a meaningful order rather than alphabetical.
+  ///
+  /// Due-date and priority keys carry a numeric prefix or a known rank, so
+  /// "Overdue" leads and "No due date" trails. Everything else sorts by label,
+  /// with the unassigned bucket last.
+  int _bucketOrder(String a, String b) {
+    if (a == '_none') return 1;
+    if (b == '_none') return -1;
+    if (_search.groupBy == GroupBy.priority) {
+      final order = TaskPriority.values.map((p) => p.name).toList();
+      return order.indexOf(a).compareTo(order.indexOf(b));
+    }
+    return a.compareTo(b);
   }
 
   List<PlannerTask> _orderedTasks(List<PlannerTask> tasks) {
@@ -242,6 +413,8 @@ class _PlannerPageState extends State<PlannerPage> {
         _error = null;
       });
       _resubscribe(workspace.id);
+      // After the boards land, so it knows which board to load favorites for.
+      await _loadSavedViews();
     } catch (error) {
       if (mounted) {
         setState(() {
@@ -497,12 +670,86 @@ class _PlannerPageState extends State<PlannerPage> {
       _selectedWorkspaceIndex = index;
       _selectedBoardIndex = 0;
       _boards = [];
-      _query = '';
+      _search = const BoardSearch();
+      _savedViews = const [];
       _searchController.clear();
       _collapsedGroupIds.clear();
       _loading = true;
     });
     await _loadWorkspaceData();
+  }
+
+  /// Surfaces a failure without tearing down the board.
+  void _showError(Object error) {
+    if (!mounted) {
+      return;
+    }
+    final message = error is StateError ? error.message : '$error';
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  // === Saved filter views ===
+
+  /// Loads this board's favorites and applies the default, if one is set.
+  Future<void> _loadSavedViews() async {
+    final board = _selectedBoard;
+    if (board == null) {
+      return;
+    }
+    try {
+      final views = await widget.repository.savedViews(board.id);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _savedViews = views;
+        // Only on arrival. Re-applying the default after every reload would
+        // undo whatever the user had just selected.
+        if (_search.isEmpty) {
+          final fallback = views.where((view) => view.isDefault).firstOrNull;
+          if (fallback != null) {
+            _search = fallback.search;
+          }
+        }
+      });
+    } on Object {
+      // A board whose favorites cannot be read is still a usable board, so
+      // this stays quiet rather than blocking the whole view behind an error.
+      if (mounted) {
+        setState(() => _savedViews = const []);
+      }
+    }
+  }
+
+  Future<void> _saveView(String name, bool isDefault) async {
+    final board = _selectedBoard;
+    final workspace = _workspace;
+    if (board == null || workspace == null) {
+      return;
+    }
+    try {
+      await widget.repository.saveView(
+        boardId: board.id,
+        workspaceId: workspace.id,
+        name: name,
+        search: _search,
+        isDefault: isDefault,
+      );
+      await _loadSavedViews();
+    } on Object catch (error) {
+      _showError(error);
+    }
+  }
+
+  Future<void> _deleteView(SavedView view) async {
+    try {
+      await widget.repository.deleteSavedView(view.id);
+      await _loadSavedViews();
+    } on Object catch (error) {
+      _showError(error);
+    }
   }
 
   Future<void> _manageMembers() async {
@@ -648,7 +895,7 @@ class _PlannerPageState extends State<PlannerPage> {
     final confirmed = await showDeleteConfirmDialog(
       context: context,
       title: others > 0
-          ? 'Delete workspace and remove $others ' 
+          ? 'Delete workspace and remove $others '
                 '${others == 1 ? "person" : "people"}?'
           : 'Delete this workspace?',
       message: others > 0
@@ -687,9 +934,7 @@ class _PlannerPageState extends State<PlannerPage> {
     if (ok && mounted) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(
-          SnackBar(content: Text('Deleted "${workspace.name}"')),
-        );
+        ..showSnackBar(SnackBar(content: Text('Deleted "${workspace.name}"')));
     }
   }
 
@@ -1380,9 +1625,12 @@ class _PlannerPageState extends State<PlannerPage> {
                 onBoardSelected: (index) {
                   setState(() {
                     _selectedBoardIndex = index;
-                    _query = '';
+                    // Filters are per board: carrying "Done" across to a board
+                    // whose statuses are unrelated would hide everything.
+                    _search = const BoardSearch();
                     _searchController.clear();
                   });
+                  _loadSavedViews();
                 },
               ),
               Expanded(
@@ -1409,47 +1657,54 @@ class _PlannerPageState extends State<PlannerPage> {
                         ),
                       )
                     else
-                    Expanded(
-                child: _PlannerContent(
-                  loading: _loading,
-                  workspaceName: _workspace?.name ?? 'your workspace',
-                  error: _error,
-                  board: _selectedBoard,
-                  groups: _visibleGroups,
-                  members: _members,
-                  collapsedGroupIds: _collapsedGroupIds,
-                  mode: _mode,
-                  readOnly: !_canEdit,
-                  searchController: _searchController,
-                  query: _query,
-                  onRetry: () {
-                    setState(() {
-                      _loading = true;
-                      _error = null;
-                    });
-                    _bootstrap();
-                  },
-                  onSearchChanged: (value) => setState(() => _query = value),
-                  onModeChanged: (mode) => setState(() => _mode = mode),
-                  taskOrder: _taskOrder,
-                  onTaskOrderChanged: (order) =>
-                      setState(() => _taskOrder = order),
-                  onCreateBoard: _createBoard,
-                  onRenameBoard: _renameBoard,
-                  onDeleteBoard: _deleteBoard,
-                  onAddGroup: _addGroup,
-                  onRenameGroup: _renameGroup,
-                  onDeleteGroup: _deleteGroup,
-                  onToggleGroup: _toggleGroup,
-                  onAddTask: _addTask,
-                  onEditTask: _editTask,
-                  onDeleteTask: _deleteTask,
-                  onStatusChanged: _changeStatus,
-                  onProgressChanged: _changeProgress,
-                  onOpenChat: _openChat,
-                  onTaskReorder: _reorderTask,
-                ),
-                    ),
+                      Expanded(
+                        child: _PlannerContent(
+                          loading: _loading,
+                          workspaceName: _workspace?.name ?? 'your workspace',
+                          error: _error,
+                          board: _selectedBoard,
+                          groups: _visibleGroups,
+                          members: _members,
+                          collapsedGroupIds: _collapsedGroupIds,
+                          mode: _mode,
+                          readOnly: !_canEdit,
+                          searchController: _searchController,
+                          search: _search,
+                          filters: _filters,
+                          savedViews: _savedViews,
+                          onRetry: () {
+                            setState(() {
+                              _loading = true;
+                              _error = null;
+                            });
+                            _bootstrap();
+                          },
+                          onSearchChanged: (value) =>
+                              setState(() => _search = value),
+                          onSaveView: _saveView,
+                          onDeleteView: _deleteView,
+                          onApplyView: (view) =>
+                              setState(() => _search = view.search),
+                          onModeChanged: (mode) => setState(() => _mode = mode),
+                          taskOrder: _taskOrder,
+                          onTaskOrderChanged: (order) =>
+                              setState(() => _taskOrder = order),
+                          onCreateBoard: _createBoard,
+                          onRenameBoard: _renameBoard,
+                          onDeleteBoard: _deleteBoard,
+                          onAddGroup: _addGroup,
+                          onRenameGroup: _renameGroup,
+                          onDeleteGroup: _deleteGroup,
+                          onToggleGroup: _toggleGroup,
+                          onAddTask: _addTask,
+                          onEditTask: _editTask,
+                          onDeleteTask: _deleteTask,
+                          onStatusChanged: _changeStatus,
+                          onProgressChanged: _changeProgress,
+                          onOpenChat: _openChat,
+                          onTaskReorder: _reorderTask,
+                        ),
+                      ),
                   ],
                 ),
               ),
@@ -1473,9 +1728,14 @@ class _PlannerContent extends StatelessWidget {
     required this.mode,
     required this.readOnly,
     required this.searchController,
-    required this.query,
+    required this.search,
+    required this.filters,
+    required this.savedViews,
     required this.onRetry,
     required this.onSearchChanged,
+    required this.onSaveView,
+    required this.onDeleteView,
+    required this.onApplyView,
     required this.onModeChanged,
     required this.taskOrder,
     required this.onTaskOrderChanged,
@@ -1505,9 +1765,14 @@ class _PlannerContent extends StatelessWidget {
   final ViewMode mode;
   final bool readOnly;
   final TextEditingController searchController;
-  final String query;
+  final BoardSearch search;
+  final List<BoardFilter> filters;
+  final List<SavedView> savedViews;
   final VoidCallback onRetry;
-  final ValueChanged<String> onSearchChanged;
+  final ValueChanged<BoardSearch> onSearchChanged;
+  final void Function(String name, bool isDefault) onSaveView;
+  final ValueChanged<SavedView> onDeleteView;
+  final ValueChanged<SavedView> onApplyView;
   final ValueChanged<ViewMode> onModeChanged;
   final TaskOrder taskOrder;
   final ValueChanged<TaskOrder> onTaskOrderChanged;
@@ -1550,9 +1815,6 @@ class _PlannerContent extends StatelessWidget {
           board: board!,
           members: members,
           readOnly: readOnly,
-          searchController: searchController,
-          query: query,
-          onSearchChanged: onSearchChanged,
           onAddTask: onAddTask,
           onAddGroup: onAddGroup,
           onRenameBoard: () => onRenameBoard(board!),
@@ -1560,8 +1822,16 @@ class _PlannerContent extends StatelessWidget {
         ),
         BoardToolbar(
           mode: mode,
-          taskOrder: taskOrder,
           onModeChanged: onModeChanged,
+          searchController: searchController,
+          search: search,
+          filters: filters,
+          savedViews: savedViews,
+          onSearchChanged: onSearchChanged,
+          onSaveView: onSaveView,
+          onDeleteView: onDeleteView,
+          onApplyView: onApplyView,
+          taskOrder: taskOrder,
           onTaskOrderChanged: onTaskOrderChanged,
         ),
         Expanded(
@@ -1582,7 +1852,9 @@ class _PlannerContent extends StatelessWidget {
             },
             child: switch (mode) {
               ViewMode.table => BoardTable(
-                key: ValueKey('table-${board!.id}-$query'),
+                key: ValueKey(
+                  'table-${board!.id}-${search.filterIds.length}-${search.groupBy.name}-${search.query}',
+                ),
                 groups: groups,
                 members: members,
                 statuses: board!.statuses,
@@ -1595,12 +1867,19 @@ class _PlannerContent extends StatelessWidget {
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
                 onOpenChat: onOpenChat,
-                onTaskReorder: taskOrder == TaskOrder.manual
+                // Disabled while grouped: the groups on screen are synthetic
+                // buckets, so a drag has no real group to write a position
+                // back to. Ordering is whatever Group By implies instead.
+                onTaskReorder:
+                    taskOrder == TaskOrder.manual &&
+                        search.groupBy == GroupBy.none
                     ? onTaskReorder
                     : null,
               ),
               ViewMode.kanban => BoardKanban(
-                key: ValueKey('kanban-${board!.id}-$query'),
+                key: ValueKey(
+                  'kanban-${board!.id}-${search.filterIds.length}-${search.groupBy.name}-${search.query}',
+                ),
                 groups: groups,
                 members: members,
                 statuses: board!.statuses,
@@ -1611,7 +1890,9 @@ class _PlannerContent extends StatelessWidget {
                 onOpenChat: onOpenChat,
               ),
               ViewMode.calendar => BoardCalendar(
-                key: ValueKey('calendar-${board!.id}-$query'),
+                key: ValueKey(
+                  'calendar-${board!.id}-${search.filterIds.length}-${search.groupBy.name}-${search.query}',
+                ),
                 groups: groups,
                 members: members,
                 statuses: board!.statuses,
@@ -1735,7 +2016,11 @@ class EmptyPlannerState extends StatelessWidget {
             const Text(
               'A board holds one project. Work inside it is organised in two '
               'levels:',
-              style: TextStyle(color: plannerMuted, fontSize: 13.5, height: 1.55),
+              style: TextStyle(
+                color: plannerMuted,
+                fontSize: 13.5,
+                height: 1.55,
+              ),
             ),
             const SizedBox(height: 22),
 
@@ -1771,7 +2056,11 @@ class EmptyPlannerState extends StatelessWidget {
                 const Expanded(
                   child: Text(
                     'You can also use + beside BOARDS in the sidebar.',
-                    style: TextStyle(color: plannerFaint, fontSize: 12, height: 1.4),
+                    style: TextStyle(
+                      color: plannerFaint,
+                      fontSize: 12,
+                      height: 1.4,
+                    ),
                   ),
                 ),
               ],
@@ -1919,7 +2208,8 @@ class FirstRunWelcome extends StatelessWidget {
                       icon: Icons.groups_outlined,
                       color: plannerViolet,
                       title: 'Workspace',
-                      detail: 'Your team. People join this — and then see '
+                      detail:
+                          'Your team. People join this — and then see '
                           'every board inside it.',
                     ),
                     _ConceptRow(
