@@ -104,7 +104,7 @@ class _JoinWorkspaceDialogState extends State<_JoinWorkspaceDialog> {
                 letterSpacing: 1.6,
               ),
               decoration: const InputDecoration(
-                hintText: 'PLNR-XXXX',
+                hintText: 'PLNR-XXXX-XXXX',
                 hintStyle: TextStyle(
                   color: plannerFaint,
                   fontSize: 17,

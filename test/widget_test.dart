@@ -145,15 +145,15 @@ void main() {
   });
 
   group('PlannerTask dates', () {
-    PlannerTask taskWith({DateTime? due, TaskStatus? status}) {
+    PlannerTask taskWith({DateTime? due}) {
       return PlannerTask(
         id: 't1',
         groupId: 'g1',
+        boardId: 'b1',
         title: 'Test',
-        owner: '',
-        status: status ?? TaskStatus.working,
         priority: TaskPriority.medium,
         progress: 0.5,
+        position: 0,
         dueDate: due,
       );
     }
@@ -162,30 +162,31 @@ void main() {
       final task = taskWith(
         due: DateTime.now().subtract(const Duration(days: 2)),
       );
-      expect(task.isOverdue, isTrue);
+      expect(task.isOverdue(), isTrue);
     });
 
     test('a completed task is never overdue', () {
+      // Completion is the board's definition now, so the caller passes it in
+      // rather than the task deciding for itself.
       final task = taskWith(
         due: DateTime.now().subtract(const Duration(days: 2)),
-        status: TaskStatus.done,
       );
-      expect(task.isOverdue, isFalse);
+      expect(task.isOverdue(done: true), isFalse);
     });
 
     test('a task with no due date is never overdue', () {
-      expect(taskWith().isOverdue, isFalse);
+      expect(taskWith().isOverdue(), isFalse);
     });
 
     test("today's date is due today, not overdue", () {
       final task = taskWith(due: DateTime.now());
       expect(task.isDueToday, isTrue);
-      expect(task.isOverdue, isFalse);
+      expect(task.isOverdue(), isFalse);
     });
 
     test('a future due date is neither overdue nor due today', () {
       final task = taskWith(due: DateTime.now().add(const Duration(days: 3)));
-      expect(task.isOverdue, isFalse);
+      expect(task.isOverdue(), isFalse);
       expect(task.isDueToday, isFalse);
     });
   });
@@ -195,22 +196,24 @@ void main() {
       final task = PlannerTask.fromMap({
         'id': 't1',
         'group_id': 'g1',
+        'board_id': 'b1',
         'title': 'Ship it',
-        'owner': 'Alex',
-        'assignee_id': 'u1',
-        'status': 'working',
+        'status_id': 's-working',
+        'assignee_ids': ['u1', 'u2'],
         'priority': 'high',
         'due_date': '2026-03-14',
         'progress': 0.25,
-        'note_count': 3,
+        'position': 2,
+        'comment_count': 3,
       });
 
       expect(task.title, 'Ship it');
-      expect(task.status, TaskStatus.working);
+      expect(task.statusId, 's-working');
       expect(task.priority, TaskPriority.high);
       expect(task.dueDate, DateTime(2026, 3, 14));
-      expect(task.noteCount, 3);
-      expect(task.assigneeId, 'u1');
+      expect(task.commentCount, 3);
+      // A task can carry several assignees; the old model held only one.
+      expect(task.assigneeIds, ['u1', 'u2']);
     });
 
     test('tolerates missing optional fields', () {
@@ -218,64 +221,96 @@ void main() {
         'id': 't1',
         'group_id': 'g1',
         'title': 'Bare',
-        'status': 'nonsense',
         'priority': 'nonsense',
       });
 
       // Unknown enum values fall back rather than throwing.
-      expect(task.status, TaskStatus.notStarted);
       expect(task.priority, TaskPriority.medium);
+      expect(task.statusId, isNull);
+      expect(task.assigneeIds, isEmpty);
       expect(task.dueDate, isNull);
       expect(task.progress, 0);
-      expect(task.noteCount, 0);
+      expect(task.commentCount, 0);
     });
   });
 
   group('Board rollups', () {
+    // The board defines its own statuses, so completion is looked up through
+    // them rather than compared against a fixed enum value.
+    const doneLabel = StatusLabel(
+      id: 's-done',
+      name: 'Done',
+      color: Colors.green,
+      position: 1,
+      isDone: true,
+    );
+    const workingLabel = StatusLabel(
+      id: 's-working',
+      name: 'Working',
+      color: Colors.orange,
+      position: 0,
+    );
+
+    const done = PlannerTask(
+      id: 't1',
+      groupId: 'g1',
+      boardId: 'b1',
+      title: 'A',
+      statusId: 's-done',
+      priority: TaskPriority.low,
+      progress: 1,
+      position: 0,
+    );
+    const open = PlannerTask(
+      id: 't2',
+      groupId: 'g1',
+      boardId: 'b1',
+      title: 'B',
+      statusId: 's-working',
+      priority: TaskPriority.low,
+      progress: 0.5,
+      position: 1,
+    );
+
+    const board = Board(
+      id: 'b1',
+      name: 'Board',
+      color: Colors.blue,
+      statuses: [workingLabel, doneLabel],
+      groups: [
+        TaskGroup(
+          id: 'g1',
+          boardId: 'b1',
+          name: 'Group',
+          color: Colors.blue,
+          tasks: [done, open],
+        ),
+        TaskGroup(
+          id: 'g2',
+          boardId: 'b1',
+          name: 'Empty',
+          color: Colors.blue,
+          tasks: [],
+        ),
+      ],
+    );
+
     test('counts tasks and completions across groups', () {
-      const done = PlannerTask(
-        id: 't1',
-        groupId: 'g1',
-        title: 'A',
-        owner: '',
-        status: TaskStatus.done,
-        priority: TaskPriority.low,
-        progress: 1,
-      );
-      const open = PlannerTask(
-        id: 't2',
-        groupId: 'g1',
-        title: 'B',
-        owner: '',
-        status: TaskStatus.working,
-        priority: TaskPriority.low,
-        progress: 0.5,
-      );
-
-      const board = Board(
-        id: 'b1',
-        name: 'Board',
-        color: Colors.blue,
-        groups: [
-          TaskGroup(
-            id: 'g1',
-            boardId: 'b1',
-            name: 'Group',
-            color: Colors.blue,
-            tasks: [done, open],
-          ),
-          TaskGroup(
-            id: 'g2',
-            boardId: 'b1',
-            name: 'Empty',
-            color: Colors.blue,
-            tasks: [],
-          ),
-        ],
-      );
-
       expect(board.taskCount, 2);
       expect(board.doneCount, 1);
+    });
+
+    test('resolves a task status by id', () {
+      expect(board.statusById('s-done')?.name, 'Done');
+      expect(board.statusById(null), isNull);
+      // A label deleted out from under a task leaves it unresolvable rather
+      // than crashing.
+      expect(board.statusById('s-gone'), isNull);
+    });
+
+    test('isDone reads the board label, not the task', () {
+      expect(board.isDone(done), isTrue);
+      expect(board.isDone(open), isFalse);
     });
   });
 

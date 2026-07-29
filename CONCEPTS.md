@@ -62,10 +62,37 @@ however you think about the work.
 
 The actual unit of work, inside a group.
 
-Carries a title, an assignee, status, priority, a due date, a start/end
-timeline, and progress. Each task also has **notes**: a shared thread the whole
-workspace can read, write to, and react to, with each note attributed to whoever
-wrote it.
+Carries a title, **any number of assignees**, a status, priority, a due date, a
+start/end timeline, and progress. Each task also has **notes**: a shared thread
+the whole workspace can read, write to, and react to, with each note attributed
+to whoever wrote it.
+
+### Statuses belong to the board
+
+"Not started / Working on it / Stuck / Done" is what a new board starts with,
+not a fixed list. Rename them, recolour them, add your own — each board keeps
+its own set, and renaming one does not touch a single task, because a task
+stores which status it has rather than what that status is called.
+
+One flag matters: a status marked **done** is what progress bars and the "3 of 7
+complete" counts read. That is why finishing a task fills its bar even if you
+renamed Done to "Shipped".
+
+## Notifications
+
+The bell fills in on its own. You are told when:
+
+- someone invites you to a workspace, or accepts your invitation
+- someone joins a workspace you are in
+- your role changes
+- a task is assigned to you
+- a task of yours is due tomorrow, today, or is overdue
+- a task you are assigned to moves, or gets a note or comment
+
+You are never notified about your own actions — you were there.
+
+Due-date reminders need one piece of setup on the Supabase side; everything else
+works the moment the schema is installed. See [SETUP.md](SETUP.md).
 
 ---
 
@@ -75,8 +102,11 @@ wrote it.
 2. **Create a workspace** — name your team. A starter board and a "To do" group
    are created with it, so you are not staring at an empty screen.
 3. **Add tasks** — *New task* in the board header.
-4. **Invite the team** — workspace menu → *Members & invites* → copy the join
-   code and send it to them. They pick *Join with a code* and they are in.
+4. **Invite the team** — workspace menu → *Members & invites*. Start typing a
+   name and pick the person; they get a notification straight away. For someone
+   who has not signed up yet, type their full email instead — they join
+   automatically the first time they sign in. Or copy the join code and send it
+   to them, and they pick *Join with a code*.
 5. **Add more boards** — the `+` beside BOARDS in the sidebar, one per project.
 
 ## Roles

@@ -48,7 +48,9 @@ class _PlannerPageState extends State<PlannerPage> {
   String? _error;
   RealtimeChannel? _channel;
   RealtimeChannel? _inviteChannel;
+  RealtimeChannel? _notificationChannel;
   List<PendingInvite> _pendingInvites = [];
+  List<AppNotification> _notifications = [];
   String _myProfileName = '';
 
   Workspace? get _workspace {
@@ -87,6 +89,7 @@ class _PlannerPageState extends State<PlannerPage> {
             boardId: group.boardId,
             name: group.name,
             color: group.color,
+            collapsed: group.collapsed,
             tasks: _orderedTasks(tasks),
           );
         })
@@ -108,9 +111,7 @@ class _PlannerPageState extends State<PlannerPage> {
       case TaskOrder.priority:
         ordered.sort((a, b) => a.priority.index.compareTo(b.priority.index));
       case TaskOrder.status:
-        ordered.sort((a, b) => _statusRank(a.status).compareTo(
-          _statusRank(b.status),
-        ));
+        ordered.sort((a, b) => _statusRank(a).compareTo(_statusRank(b)));
     }
     return ordered;
   }
@@ -128,14 +129,11 @@ class _PlannerPageState extends State<PlannerPage> {
     return aDate.compareTo(bDate);
   }
 
-  int _statusRank(TaskStatus status) {
-    return switch (status) {
-      TaskStatus.notStarted => 0,
-      TaskStatus.working => 1,
-      TaskStatus.stuck => 2,
-      TaskStatus.done => 3,
-    };
-  }
+  /// Sorting by status follows the order the board arranged its own labels in,
+  /// which is the order they appear as kanban columns. A task whose label was
+  /// deleted sorts last.
+  double _statusRank(PlannerTask task) =>
+      _selectedBoard?.statusById(task.statusId)?.position ?? double.infinity;
 
   @override
   void initState() {
@@ -154,6 +152,10 @@ class _PlannerPageState extends State<PlannerPage> {
     if (inviteChannel != null) {
       widget.repository.unsubscribe(inviteChannel);
     }
+    final notificationChannel = _notificationChannel;
+    if (notificationChannel != null) {
+      widget.repository.unsubscribe(notificationChannel);
+    }
     super.dispose();
   }
 
@@ -163,6 +165,7 @@ class _PlannerPageState extends State<PlannerPage> {
     _myProfileName =
         (widget.auth.currentUser?.userMetadata?['full_name'] ?? '') as String;
     unawaited(_loadInvites());
+    unawaited(_loadNotifications());
     unawaited(_loadMyProfile());
     // Keeps the bell live, so an invitation that arrives while the app is open
     // shows up without a restart.
@@ -170,6 +173,13 @@ class _PlannerPageState extends State<PlannerPage> {
       onChange: () {
         if (mounted) {
           _loadInvites();
+        }
+      },
+    );
+    _notificationChannel = widget.repository.subscribeToNotifications(
+      onChange: () {
+        if (mounted) {
+          _loadNotifications();
         }
       },
     );
@@ -289,6 +299,15 @@ class _PlannerPageState extends State<PlannerPage> {
       return 'The database schema is missing. Run supabase/schema.sql in your '
           'Supabase project, then restart.';
     }
+    // An enum, column or function the app knows about and the database does
+    // not — the app is ahead of the schema. Worth naming, because the fix is
+    // running a migration rather than anything the user did wrong.
+    if (text.contains('invalid input value for enum') ||
+        (text.contains('column') && text.contains('does not exist')) ||
+        text.contains('schema cache')) {
+      return 'The database is behind this version of the app. Run the latest '
+          'migration in supabase/migrations, then restart.';
+    }
     return text;
   }
 
@@ -302,12 +321,20 @@ class _PlannerPageState extends State<PlannerPage> {
       return true;
     } catch (error) {
       if (mounted) {
+        // The caller's message says which action failed; _describe says why.
+        // Showing only the former left every failure reading "Could not create
+        // the task", which is true and useless — the reason was thrown away at
+        // exactly the moment someone needed it.
+        final reason = _describe(error);
         ScaffoldMessenger.of(context)
           ..hideCurrentSnackBar()
           ..showSnackBar(
             SnackBar(
               backgroundColor: plannerRed,
-              content: Text(failureMessage ?? _describe(error)),
+              duration: const Duration(seconds: 6),
+              content: Text(
+                failureMessage == null ? reason : '$failureMessage $reason',
+              ),
             ),
           );
       }
@@ -316,6 +343,10 @@ class _PlannerPageState extends State<PlannerPage> {
   }
 
   /// Blocks writes for viewers with an explanation rather than a silent no-op.
+  ///
+  /// This is the gate for *content* — boards, groups, tasks, notes — which
+  /// members are meant to edit. Workspace settings are a different question;
+  /// see [_requireManager].
   bool _requireEditor() {
     if (_canEdit) {
       return true;
@@ -325,6 +356,29 @@ class _PlannerPageState extends State<PlannerPage> {
       ..showSnackBar(
         const SnackBar(
           content: Text('You have view-only access to this workspace.'),
+        ),
+      );
+    return false;
+  }
+
+  /// Gate for changing the workspace itself: its name, colour, people and join
+  /// code. Owners and admins only.
+  ///
+  /// Separate from [_requireEditor] because a member can edit every task in the
+  /// workspace and still have no business renaming it. `workspaces_update`
+  /// already enforces this, so using the content gate here offered members a
+  /// dialog whose Save the database would reject.
+  bool _requireManager() {
+    if (_workspace?.role.canManageMembers ?? false) {
+      return true;
+    }
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Only the workspace owner and admins can change its settings.',
+          ),
         ),
       );
     return false;
@@ -351,20 +405,12 @@ class _PlannerPageState extends State<PlannerPage> {
     setState(() => _loading = true);
 
     final ok = await _guard(() async {
+      // The starter board and its "To do" group come from the
+      // handle_new_workspace trigger, in the same transaction as the workspace
+      // row. Seeding them here as well is what produced two boards.
       final workspace = await widget.repository.createWorkspace(
         name: result.name,
         color: result.color,
-      );
-      // Seed a board so the next screen has something in it.
-      final boardId = await widget.repository.createBoard(
-        workspaceId: workspace.id,
-        name: 'My first board',
-        color: result.color,
-      );
-      await widget.repository.createGroup(
-        boardId: boardId,
-        name: 'To do',
-        color: plannerBlue,
       );
       if (!mounted) {
         return;
@@ -475,7 +521,7 @@ class _PlannerPageState extends State<PlannerPage> {
 
   Future<void> _renameWorkspace() async {
     final workspace = _workspace;
-    if (workspace == null || !_requireEditor()) {
+    if (workspace == null || !_requireManager()) {
       return;
     }
     final result = await showNameDialog(
@@ -510,6 +556,75 @@ class _PlannerPageState extends State<PlannerPage> {
   /// The confirmation is deliberately heavier when other people are involved:
   /// removing a workspace with members also removes their access, and that is
   /// not obvious from "delete".
+  /// Leaves a workspace someone else owns.
+  ///
+  /// Nothing is deleted — the boards and tasks stay for everyone else. This
+  /// user simply loses access, and can be invited back or rejoin with the code.
+  Future<void> _leaveWorkspace() async {
+    final workspace = _workspace;
+    if (workspace == null) {
+      return;
+    }
+
+    if (workspace.role == WorkspaceRole.owner) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'You own this workspace, so you cannot leave it. Delete it '
+              'instead, or make someone else the owner first.',
+            ),
+          ),
+        );
+      return;
+    }
+
+    final confirmed = await showDeleteConfirmDialog(
+      context: context,
+      title: 'Leave this workspace?',
+      message:
+          'You will lose access to "${workspace.name}" and every board in it. '
+          'Nothing is deleted for the rest of the team, and you can rejoin '
+          'with the workspace code or a new invitation.',
+      confirmLabel: 'Leave workspace',
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    final ok = await _guard(() async {
+      await widget.repository.leaveWorkspace(
+        workspaceId: workspace.id,
+        isOwner: workspace.role == WorkspaceRole.owner,
+      );
+      final workspaces = await widget.repository.loadWorkspaces();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _workspaces = workspaces;
+        _selectedWorkspaceIndex = 0;
+        _selectedBoardIndex = 0;
+        _boards = [];
+        _members = [];
+        _collapsedGroupIds.clear();
+        // Leaving the last one lands on the welcome screen, which needs no
+        // load — anything else has to fetch the workspace it fell back to.
+        _loading = workspaces.isNotEmpty;
+      });
+      if (workspaces.isNotEmpty) {
+        await _loadWorkspaceData();
+      }
+    }, failureMessage: 'Could not leave the workspace.');
+
+    if (ok && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text('Left "${workspace.name}"')));
+    }
+  }
+
   Future<void> _deleteWorkspace() async {
     final workspace = _workspace;
     if (workspace == null) {
@@ -597,9 +712,152 @@ class _PlannerPageState extends State<PlannerPage> {
     }
   }
 
+  Future<void> _loadNotifications() async {
+    try {
+      final notifications = await widget.repository.loadNotifications();
+      if (mounted) {
+        setState(() => _notifications = notifications);
+      }
+    } catch (_) {
+      // Same reasoning as _loadInvites: never surface an error for the bell.
+    }
+  }
+
+  /// Opens whatever a notification points at, and marks it read.
+  Future<void> _openNotification(AppNotification notification) async {
+    if (notification.isUnread) {
+      await _guard(
+        () => widget.repository.markNotificationsRead(ids: [notification.id]),
+        failureMessage: 'Could not mark that as read.',
+      );
+      await _loadNotifications();
+    }
+
+    // An invitation has nowhere to navigate to until it is accepted — the
+    // workspace is not yours yet.
+    if (notification.isActionable) {
+      final stillPending = _pendingInvites.any(
+        (invite) => invite.id == notification.inviteId,
+      );
+      final joined =
+          notification.workspaceId != null &&
+          _workspaces.any((w) => w.id == notification.workspaceId);
+
+      if (!stillPending && !joined && mounted) {
+        // The announcement outlived the invitation. Says what happened rather
+        // than "no access", which reads as a permission problem when it is
+        // really an invitation that was already answered or withdrawn.
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(
+                'That invitation is no longer open. Ask for a new one, or join '
+                'with the workspace code.',
+              ),
+            ),
+          );
+        return;
+      }
+      if (stillPending && mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Accept or decline this invitation from the bell above.',
+              ),
+            ),
+          );
+        return;
+      }
+    }
+
+    // Switch to the workspace it belongs to, then the board within it. Nothing
+    // to do when it is already the active one.
+    final workspaceId = notification.workspaceId;
+    if (workspaceId != null && workspaceId != _workspace?.id) {
+      final index = _workspaces.indexWhere((w) => w.id == workspaceId);
+      if (index < 0) {
+        // Notified about somewhere you have since left, or never joined.
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              const SnackBar(
+                content: Text('You no longer have access to that workspace.'),
+              ),
+            );
+        }
+        return;
+      }
+      await _switchWorkspace(index);
+    }
+
+    final boardId = notification.boardId;
+    if (boardId != null && mounted) {
+      final index = _boards.indexWhere((b) => b.id == boardId);
+      if (index >= 0) {
+        setState(() => _selectedBoardIndex = index);
+        // The board has to be on screen before the task can be found in it.
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    // Landing on the right board is not the same as arriving at the thing you
+    // were told about. A mention or a due date is about one task, so open it —
+    // the chat for anything conversational, the task itself otherwise.
+    final taskId = notification.taskId;
+    if (taskId == null || !mounted) {
+      return;
+    }
+
+    final task = _findTask(taskId);
+    if (task == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(content: Text('That task no longer exists.')),
+        );
+      return;
+    }
+
+    switch (notification.kind) {
+      case NotificationKind.mentioned:
+      case NotificationKind.commentAdded:
+        await _openChat(task);
+      default:
+        await _editTask(task);
+    }
+  }
+
+  /// Finds a task by id across every group of every loaded board.
+  PlannerTask? _findTask(String taskId) {
+    for (final board in _boards) {
+      for (final group in board.groups) {
+        for (final task in group.tasks) {
+          if (task.id == taskId) {
+            return task;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  Future<void> _markAllNotificationsRead() async {
+    await _guard(
+      () => widget.repository.markNotificationsRead(),
+      failureMessage: 'Could not mark those as read.',
+    );
+    await _loadNotifications();
+  }
+
   Future<void> _acceptInvite(PendingInvite invite) async {
     final ok = await _guard(() async {
-      await widget.repository.acceptInvites();
+      // Named explicitly, so accepting one invitation does not silently claim
+      // every other pending one.
+      await widget.repository.acceptInvites(inviteId: invite.id);
       final workspaces = await widget.repository.loadWorkspaces();
       if (!mounted) {
         return;
@@ -613,6 +871,7 @@ class _PlannerPageState extends State<PlannerPage> {
       });
       await _loadWorkspaceData();
       await _loadInvites();
+      await _markInviteNotificationRead(invite.id);
     }, failureMessage: 'Could not accept the invitation.');
 
     if (ok && mounted) {
@@ -625,10 +884,39 @@ class _PlannerPageState extends State<PlannerPage> {
   }
 
   Future<void> _declineInvite(PendingInvite invite) async {
-    await _guard(() async {
+    final ok = await _guard(() async {
       await widget.repository.declineInvite(invite.id);
       await _loadInvites();
+      // The announcement outlives the invitation, so clear it too — otherwise
+      // the badge keeps counting something already dealt with.
+      await _markInviteNotificationRead(invite.id);
     }, failureMessage: 'Could not decline the invitation.');
+
+    if (ok && mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('Declined ${invite.workspaceName}')),
+        );
+    }
+  }
+
+  /// Marks the notification announcing an invitation as read, once the
+  /// invitation itself has been answered.
+  Future<void> _markInviteNotificationRead(String inviteId) async {
+    final ids = _notifications
+        .where((n) => n.inviteId == inviteId && n.isUnread)
+        .map((n) => n.id)
+        .toList();
+    if (ids.isEmpty) {
+      return;
+    }
+    try {
+      await widget.repository.markNotificationsRead(ids: ids);
+      await _loadNotifications();
+    } catch (_) {
+      // Cosmetic; never fail answering an invitation over the badge.
+    }
   }
 
   Future<void> _signOut() async {
@@ -712,6 +1000,35 @@ class _PlannerPageState extends State<PlannerPage> {
       );
       await _loadWorkspaceData();
     }, failureMessage: 'Could not save the board.');
+  }
+
+  /// Pins a board to the top of the sidebar, or unpins it.
+  ///
+  /// Reloads rather than flipping the flag locally: pinning reorders the list,
+  /// and the server decides that order.
+  Future<void> _togglePinBoard(Board board) async {
+    if (!_requireEditor()) {
+      return;
+    }
+    await _guard(() async {
+      await widget.repository.setBoardPinned(
+        boardId: board.id,
+        pinned: !board.pinned,
+      );
+      // Reloaded rather than flipped locally: pinning reorders the sidebar,
+      // and the server decides that order.
+      //
+      // Not _refreshBoards(), which swallows its errors — a pin that silently
+      // failed looked to the user like the button did nothing at all.
+      final workspace = _workspace;
+      if (workspace == null) {
+        return;
+      }
+      final boards = await widget.repository.loadBoards(workspace.id);
+      if (mounted) {
+        setState(() => _boards = boards);
+      }
+    }, failureMessage: 'Could not pin the board.');
   }
 
   Future<void> _deleteBoard(Board board) async {
@@ -827,27 +1144,24 @@ class _PlannerPageState extends State<PlannerPage> {
       context: context,
       groups: board.groups,
       members: _members,
+      statuses: board.statuses,
     );
     if (result == null) {
       return;
     }
 
-    final group = board.groups.firstWhere(
-      (group) => group.id == result.groupId,
-    );
     await _guard(() async {
+      // No position: the repository appends past the group's current maximum.
       await widget.repository.createTask(
         groupId: result.groupId,
         title: result.title,
-        owner: result.owner,
-        assigneeId: result.assigneeId,
-        status: result.status,
+        statusId: result.statusId,
+        assigneeIds: result.assigneeIds,
         priority: result.priority,
         dueDate: result.dueDate,
         startDate: result.startDate,
         endDate: result.endDate,
         progress: result.progress,
-        position: group.tasks.length,
       );
       await _loadWorkspaceData();
     }, failureMessage: 'Could not create the task.');
@@ -862,6 +1176,7 @@ class _PlannerPageState extends State<PlannerPage> {
       context: context,
       groups: board.groups,
       members: _members,
+      statuses: board.statuses,
       task: task,
     );
     if (result == null) {
@@ -873,9 +1188,8 @@ class _PlannerPageState extends State<PlannerPage> {
         taskId: task.id,
         groupId: result.groupId,
         title: result.title,
-        owner: result.owner,
-        assigneeId: result.assigneeId,
-        status: result.status,
+        statusId: result.statusId,
+        assigneeIds: result.assigneeIds,
         priority: result.priority,
         dueDate: result.dueDate,
         startDate: result.startDate,
@@ -905,12 +1219,18 @@ class _PlannerPageState extends State<PlannerPage> {
     }, failureMessage: 'Could not delete the task.');
   }
 
-  Future<void> _changeStatus(PlannerTask task, TaskStatus status) async {
+  Future<void> _changeStatus(PlannerTask task, StatusLabel status) async {
     if (!_requireEditor()) {
       return;
     }
     await _guard(() async {
-      await widget.repository.updateTaskStatus(task, status);
+      await widget.repository.updateTaskStatus(
+        task,
+        status,
+        // Passed so the activity entry can read "Working -> Done" rather than
+        // just naming where it landed.
+        previous: _selectedBoard?.statusById(task.statusId),
+      );
       await _refreshBoards();
     }, failureMessage: 'Could not update the status.');
   }
@@ -920,7 +1240,13 @@ class _PlannerPageState extends State<PlannerPage> {
       return;
     }
     await _guard(() async {
-      await widget.repository.updateTaskProgress(task, progress);
+      await widget.repository.updateTaskProgress(
+        task,
+        progress,
+        // Dragging to either end moves the status with it, using this board's
+        // own labels.
+        statuses: _selectedBoard?.statuses ?? const [],
+      );
       await _refreshBoards();
     }, failureMessage: 'Could not update the progress.');
   }
@@ -962,6 +1288,7 @@ class _PlannerPageState extends State<PlannerPage> {
       boardId: currentGroup.boardId,
       name: currentGroup.name,
       color: currentGroup.color,
+      collapsed: currentGroup.collapsed,
       tasks: tasks,
     );
 
@@ -973,21 +1300,32 @@ class _PlannerPageState extends State<PlannerPage> {
           id: board.id,
           name: board.name,
           color: board.color,
+          statuses: board.statuses,
           groups: updatedGroups,
         );
         _boards = updatedBoards;
       });
     }
 
+    // One request naming the new neighbours, rather than renumbering every
+    // task after the insertion point. The server takes the midpoint of their
+    // positions, so only this row is written.
     await _guard(() async {
-      await widget.repository.updateTaskPositions(
-        tasks.map((task) => task.id).toList(),
+      await widget.repository.moveTask(
+        taskId: task.id,
+        groupId: group.id,
+        beforeTaskId: adjustedNewIndex > 0
+            ? tasks[adjustedNewIndex - 1].id
+            : null,
+        afterTaskId: adjustedNewIndex < tasks.length - 1
+            ? tasks[adjustedNewIndex + 1].id
+            : null,
       );
     }, failureMessage: 'Could not reorder tasks.');
   }
 
-  Future<void> _openNotes(PlannerTask task) async {
-    await showTaskNotesDialog(
+  Future<void> _openChat(PlannerTask task) async {
+    await showTaskChatDialog(
       context: context,
       task: task,
       repository: widget.repository,
@@ -1032,11 +1370,13 @@ class _PlannerPageState extends State<PlannerPage> {
                 onJoinWorkspace: _joinWorkspace,
                 onRenameWorkspace: _renameWorkspace,
                 onManageMembers: _manageMembers,
+                onLeaveWorkspace: _leaveWorkspace,
                 onDeleteWorkspace: _deleteWorkspace,
                 onSignOut: _signOut,
                 onCreateBoard: _createBoard,
                 onRenameBoard: _renameBoard,
                 onDeleteBoard: _deleteBoard,
+                onPinBoard: _togglePinBoard,
                 onBoardSelected: (index) {
                   setState(() {
                     _selectedBoardIndex = index;
@@ -1052,6 +1392,9 @@ class _PlannerPageState extends State<PlannerPage> {
                       fullName: _myProfileName,
                       email: widget.auth.currentUser?.email ?? '',
                       invites: _pendingInvites,
+                      notifications: _notifications,
+                      onOpenNotification: _openNotification,
+                      onMarkAllRead: _markAllNotificationsRead,
                       onAcceptInvite: _acceptInvite,
                       onDeclineInvite: _declineInvite,
                     ),
@@ -1103,7 +1446,7 @@ class _PlannerPageState extends State<PlannerPage> {
                   onDeleteTask: _deleteTask,
                   onStatusChanged: _changeStatus,
                   onProgressChanged: _changeProgress,
-                  onOpenNotes: _openNotes,
+                  onOpenChat: _openChat,
                   onTaskReorder: _reorderTask,
                 ),
                     ),
@@ -1148,7 +1491,7 @@ class _PlannerContent extends StatelessWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onOpenNotes,
+    required this.onOpenChat,
     required this.onTaskReorder,
   });
 
@@ -1178,11 +1521,11 @@ class _PlannerContent extends StatelessWidget {
   final VoidCallback onAddTask;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, TaskStatus status)
+  final Future<void> Function(PlannerTask task, StatusLabel status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -1242,6 +1585,7 @@ class _PlannerContent extends StatelessWidget {
                 key: ValueKey('table-${board!.id}-$query'),
                 groups: groups,
                 members: members,
+                statuses: board!.statuses,
                 collapsedGroupIds: collapsedGroupIds,
                 onToggleGroup: onToggleGroup,
                 onRenameGroup: onRenameGroup,
@@ -1250,7 +1594,7 @@ class _PlannerContent extends StatelessWidget {
                 onDeleteTask: onDeleteTask,
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
-                onOpenNotes: onOpenNotes,
+                onOpenChat: onOpenChat,
                 onTaskReorder: taskOrder == TaskOrder.manual
                     ? onTaskReorder
                     : null,
@@ -1259,22 +1603,28 @@ class _PlannerContent extends StatelessWidget {
                 key: ValueKey('kanban-${board!.id}-$query'),
                 groups: groups,
                 members: members,
+                statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
-                onOpenNotes: onOpenNotes,
+                onOpenChat: onOpenChat,
               ),
               ViewMode.calendar => BoardCalendar(
                 key: ValueKey('calendar-${board!.id}-$query'),
                 groups: groups,
                 members: members,
+                statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
-                onOpenNotes: onOpenNotes,
+                onOpenChat: onOpenChat,
               ),
+              // Timeline, Gantt and Chart are accepted by the database so a
+              // saved view can outlive the client, but nothing renders them
+              // yet. The toolbar offers only the three above.
+              _ => const SizedBox.shrink(),
             },
           ),
         ),

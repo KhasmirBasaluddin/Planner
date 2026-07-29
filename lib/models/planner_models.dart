@@ -110,10 +110,7 @@ class Workspace {
 }
 
 class WorkspaceMember {
-  const WorkspaceMember({
-    required this.profile,
-    required this.role,
-  });
+  const WorkspaceMember({required this.profile, required this.role});
 
   final UserProfile profile;
   final WorkspaceRole role;
@@ -125,10 +122,14 @@ class WorkspaceInvite {
     required this.email,
     required this.role,
     required this.createdAt,
+    this.invitee,
     this.accepted = false,
   });
 
-  factory WorkspaceInvite.fromMap(Map<String, dynamic> map) {
+  factory WorkspaceInvite.fromMap(
+    Map<String, dynamic> map, {
+    UserProfile? invitee,
+  }) {
     return WorkspaceInvite(
       id: map['id'] as String,
       email: (map['email'] ?? '') as String,
@@ -136,6 +137,7 @@ class WorkspaceInvite {
       createdAt:
           DateTime.tryParse((map['created_at'] ?? '') as String) ??
           DateTime.now(),
+      invitee: invitee,
       accepted: map['accepted_at'] != null,
     );
   }
@@ -144,7 +146,19 @@ class WorkspaceInvite {
   final String email;
   final WorkspaceRole role;
   final DateTime createdAt;
+
+  /// The invited person's profile, when they already have an account. Null for
+  /// someone invited by email who has not signed up yet — the one case where
+  /// the address is all there is to show.
+  final UserProfile? invitee;
+
   final bool accepted;
+
+  /// Their name if we know it, otherwise the address they were invited at.
+  String get displayName => invitee?.displayName ?? email;
+
+  /// True when this invitation is waiting on someone who has not registered.
+  bool get isPendingSignup => invitee == null;
 }
 
 /// An invitation waiting for the signed-in user to accept or decline.
@@ -156,6 +170,8 @@ class PendingInvite {
     required this.workspaceColor,
     required this.role,
     required this.createdAt,
+    this.invitedBy,
+    this.memberCount = 0,
   });
 
   final String id;
@@ -164,6 +180,121 @@ class PendingInvite {
   final Color workspaceColor;
   final WorkspaceRole role;
   final DateTime createdAt;
+
+  /// Who sent it. Null if that account has since been deleted — the invitation
+  /// survives them, so this cannot be required.
+  final UserProfile? invitedBy;
+
+  /// How many people are already in the workspace. Zero when unknown.
+  final int memberCount;
+
+  /// "Maria invited you" — the first thing worth knowing about an invitation.
+  String get inviterLine {
+    final who = invitedBy?.displayName;
+    return who == null ? 'You have been invited' : '$who invited you';
+  }
+
+  /// "4 members · 2d ago", omitting either half when it is not known.
+  String get contextLine {
+    final parts = <String>[
+      if (memberCount > 0)
+        '$memberCount ${memberCount == 1 ? 'member' : 'members'}',
+      _age,
+    ];
+    return parts.join(' · ');
+  }
+
+  String get _age {
+    final elapsed = DateTime.now().difference(createdAt);
+    if (elapsed.inMinutes < 1) {
+      return 'just now';
+    }
+    if (elapsed.inHours < 1) {
+      return '${elapsed.inMinutes}m ago';
+    }
+    if (elapsed.inDays < 1) {
+      return '${elapsed.inHours}h ago';
+    }
+    if (elapsed.inDays < 7) {
+      return '${elapsed.inDays}d ago';
+    }
+    return '${(elapsed.inDays / 7).floor()}w ago';
+  }
+
+  /// What the role actually lets you do, in the words the roles table uses.
+  String get roleSummary => switch (role) {
+    WorkspaceRole.owner => 'Full control of the workspace',
+    WorkspaceRole.admin => 'Can edit work and manage people',
+    WorkspaceRole.member => 'Can create and edit boards and tasks',
+    WorkspaceRole.viewer => 'Read-only — can see work but not change it',
+  };
+}
+
+/// Progress that agrees with a status, given what it was before.
+///
+/// Status and progress describe the same thing twice, so they have to move
+/// together or the board contradicts itself — "Working" on a full bar, or
+/// "Done" on an empty one.
+///
+/// The rule:
+///   * a done status fills the bar
+///   * a not-started status empties it
+///   * anything in between keeps the current value, *unless* that value sits
+///     at an end which the new status contradicts — 100% is not "Working" and
+///     0% is not "Working" either, so both fall back to a neutral midpoint
+///
+/// Only the contradiction is corrected. A task at 40% moved to "Stuck" stays
+/// at 40%, because nothing about being stuck says how far along it is.
+double progressForStatus(StatusLabel status, double current) {
+  if (status.isDone) {
+    return 1;
+  }
+  if (status.isDefault) {
+    return 0;
+  }
+  // An in-between status cannot be complete, and cannot be untouched either.
+  // 0.5 rather than nudging off the end by a hair: an invented number should
+  // at least look invented, not like a real measurement.
+  if (current >= 1 || current <= 0) {
+    return 0.5;
+  }
+  return current;
+}
+
+/// A status a board defines for its tasks.
+///
+/// Boards name their own, so "Working on it" can become "In progress" without
+/// touching a single task — the task holds the id, not the word.
+class StatusLabel {
+  const StatusLabel({
+    required this.id,
+    required this.name,
+    required this.color,
+    required this.position,
+    this.isDone = false,
+    this.isDefault = false,
+  });
+
+  factory StatusLabel.fromMap(Map<String, dynamic> map) {
+    return StatusLabel(
+      id: map['id'] as String,
+      name: (map['name'] ?? '') as String,
+      color: Color((map['color'] as num?)?.toInt() ?? 0xFF9AA4B2),
+      position: (map['position'] as num?)?.toDouble() ?? 0,
+      isDone: (map['is_done'] ?? false) as bool,
+      isDefault: (map['is_default'] ?? false) as bool,
+    );
+  }
+
+  final String id;
+  final String name;
+  final Color color;
+  final double position;
+
+  /// Which labels count as complete. Progress rollups test this rather than
+  /// comparing against the word "Done".
+  final bool isDone;
+  final bool isDefault;
 }
 
 class Board {
@@ -172,19 +303,74 @@ class Board {
     required this.name,
     required this.color,
     required this.groups,
+    this.statuses = const [],
+    this.pinned = false,
   });
+
+  factory Board.fromMap(Map<String, dynamic> map) {
+    final statusMaps = (map['statuses'] as List?) ?? const [];
+    final statuses = statusMaps
+        .whereType<Map<String, dynamic>>()
+        .map(StatusLabel.fromMap)
+        .toList();
+
+    final groupMaps = (map['groups'] as List?) ?? const [];
+    final groups = groupMaps
+        .whereType<Map<String, dynamic>>()
+        .map(TaskGroup.fromMap)
+        .toList();
+
+    return Board(
+      id: map['id'] as String,
+      name: (map['name'] ?? '') as String,
+      color: Color((map['color'] as num?)?.toInt() ?? 0xFF0F6BFF),
+      pinned: (map['pinned'] ?? false) as bool,
+      statuses: statuses,
+      groups: groups,
+    );
+  }
 
   final String id;
   final String name;
   final Color color;
   final List<TaskGroup> groups;
 
+  /// Pinned boards sort above the rest in the sidebar. Per workspace, so the
+  /// whole team sees the same board at the top.
+  final bool pinned;
+
+  /// The statuses this board defines, in display order.
+  final List<StatusLabel> statuses;
+
+  StatusLabel? statusById(String? id) {
+    if (id == null) {
+      return null;
+    }
+    for (final status in statuses) {
+      if (status.id == id) {
+        return status;
+      }
+    }
+    return null;
+  }
+
+  StatusLabel? get defaultStatus {
+    for (final status in statuses) {
+      if (status.isDefault) {
+        return status;
+      }
+    }
+    return statuses.isEmpty ? null : statuses.first;
+  }
+
   int get taskCount => groups.fold(0, (sum, group) => sum + group.tasks.length);
 
   int get doneCount => groups.fold(0, (sum, group) {
-    return sum +
-        group.tasks.where((task) => task.status == TaskStatus.done).length;
+    return sum + group.tasks.where((task) => isDone(task)).length;
   });
+
+  /// Completion is a property of the board's labels, not of the task.
+  bool isDone(PlannerTask task) => statusById(task.statusId)?.isDone ?? false;
 }
 
 class TaskGroup {
@@ -194,41 +380,81 @@ class TaskGroup {
     required this.name,
     required this.color,
     required this.tasks,
+    this.collapsed = false,
   });
+
+  factory TaskGroup.fromMap(Map<String, dynamic> map) {
+    final taskMaps = (map['tasks'] as List?) ?? const [];
+    return TaskGroup(
+      id: map['id'] as String,
+      boardId: (map['board_id'] ?? '') as String,
+      name: (map['name'] ?? '') as String,
+      color: Color((map['color'] as num?)?.toInt() ?? 0xFF0F6BFF),
+      collapsed: (map['collapsed'] ?? false) as bool,
+      tasks: taskMaps
+          .whereType<Map<String, dynamic>>()
+          .map(PlannerTask.fromMap)
+          .toList(),
+    );
+  }
 
   final String id;
   final String boardId;
   final String name;
   final Color color;
   final List<PlannerTask> tasks;
+  final bool collapsed;
 }
 
 class PlannerTask {
   const PlannerTask({
     required this.id,
     required this.groupId,
+    required this.boardId,
     required this.title,
-    required this.owner,
-    required this.status,
     required this.priority,
     required this.progress,
-    this.assigneeId,
+    required this.position,
+    this.progressAt,
+    this.statusId,
+    this.assigneeIds = const [],
     this.dueDate,
     this.startDate,
     this.endDate,
-    this.noteCount = 0,
+    this.commentCount = 0,
   });
+
+  factory PlannerTask.fromMap(Map<String, dynamic> map) {
+    final assignees = (map['assignee_ids'] as List?) ?? const [];
+    return PlannerTask(
+      id: map['id'] as String,
+      groupId: map['group_id'] as String,
+      boardId: (map['board_id'] ?? '') as String,
+      title: (map['title'] ?? '') as String,
+      statusId: map['status_id'] as String?,
+      priority: TaskPriority.fromName((map['priority'] ?? 'medium') as String),
+      dueDate: _parseDate(map['due_date']),
+      startDate: _parseDate(map['start_date']),
+      endDate: _parseDate(map['end_date']),
+      progress: (map['progress'] as num?)?.toDouble() ?? 0,
+      position: (map['position'] as num?)?.toDouble() ?? 0,
+      progressAt: _parseDate(map['progress_at']),
+      commentCount: (map['comment_count'] as num?)?.toInt() ?? 0,
+      assigneeIds: assignees.whereType<String>().toList(),
+    );
+  }
 
   final String id;
   final String groupId;
+  final String boardId;
   final String title;
 
-  /// Free-text owner label, kept for tasks with no linked account.
-  final String owner;
+  /// Points at one of the board's [StatusLabel]s. Null only if the label was
+  /// deleted out from under the task.
+  final String? statusId;
 
-  /// Set when the task is assigned to a real workspace member.
-  final String? assigneeId;
-  final TaskStatus status;
+  /// Everyone assigned. A task can have several, or none.
+  final List<String> assigneeIds;
   final TaskPriority priority;
 
   /// Real dates — sorting and overdue checks depend on these being typed.
@@ -236,16 +462,26 @@ class PlannerTask {
   final DateTime? startDate;
   final DateTime? endDate;
   final double progress;
-  final int noteCount;
 
-  bool get isOverdue {
+  /// Fractional, so a task moves between two neighbours without renumbering
+  /// the rest of the group.
+  final double position;
+
+  /// When the progress bar last moved — not the same as when the task was last
+  /// edited. Renaming it or changing a date does not count, which is what lets
+  /// the stale sweep tell a stalled task from a busy one.
+  final DateTime? progressAt;
+  final int commentCount;
+
+  /// Overdue needs to know whether the task is finished, which is the board's
+  /// business — hence the parameter rather than a bare getter.
+  bool isOverdue({bool done = false}) {
     final due = dueDate;
-    if (due == null || status == TaskStatus.done) {
+    if (due == null || done) {
       return false;
     }
     final today = DateTime.now();
-    final midnight = DateTime(today.year, today.month, today.day);
-    return due.isBefore(midnight);
+    return due.isBefore(DateTime(today.year, today.month, today.day));
   }
 
   bool get isDueToday {
@@ -256,23 +492,6 @@ class PlannerTask {
     final now = DateTime.now();
     return due.year == now.year && due.month == now.month && due.day == now.day;
   }
-
-  factory PlannerTask.fromMap(Map<String, dynamic> map) {
-    return PlannerTask(
-      id: map['id'] as String,
-      groupId: map['group_id'] as String,
-      title: (map['title'] ?? '') as String,
-      owner: (map['owner'] ?? '') as String,
-      assigneeId: map['assignee_id'] as String?,
-      status: TaskStatus.fromName((map['status'] ?? 'notStarted') as String),
-      priority: TaskPriority.fromName((map['priority'] ?? 'medium') as String),
-      dueDate: _parseDate(map['due_date']),
-      startDate: _parseDate(map['start_date']),
-      endDate: _parseDate(map['end_date']),
-      progress: (map['progress'] as num?)?.toDouble() ?? 0,
-      noteCount: (map['note_count'] as num?)?.toInt() ?? 0,
-    );
-  }
 }
 
 DateTime? _parseDate(Object? value) {
@@ -282,90 +501,320 @@ DateTime? _parseDate(Object? value) {
   return DateTime.tryParse(value.toString());
 }
 
-/// A note on a task, visible to the whole workspace and attributed to whoever
-/// wrote it.
-class TaskNote {
-  const TaskNote({
+/// A message in a task's chat.
+///
+/// Replaces the sticky-note model: teams were writing messages to each other on
+/// the notes anyway, so this is the shape the use already had.
+class TaskComment {
+  const TaskComment({
     required this.id,
     required this.taskId,
     required this.body,
-    required this.color,
-    required this.pinned,
     required this.createdAt,
-    required this.updatedAt,
+    this.parentId,
     this.author,
-    this.editedBy,
+    this.editedAt,
     this.reactions = const {},
     this.myReactions = const {},
+    this.mentionedIds = const [],
+    this.replies = const [],
   });
 
-  factory TaskNote.fromMap(
+  factory TaskComment.fromMap(
     Map<String, dynamic> map, {
     UserProfile? author,
-    UserProfile? editedBy,
     Map<String, int> reactions = const {},
     Set<String> myReactions = const {},
+    List<String> mentionedIds = const [],
+    List<TaskComment> replies = const [],
   }) {
-    return TaskNote(
+    return TaskComment(
       id: map['id'] as String,
       taskId: map['task_id'] as String,
+      parentId: map['parent_id'] as String?,
       body: (map['body'] ?? '') as String,
-      color: Color((map['color'] as num?)?.toInt() ?? 0xFFFFF3B0),
-      pinned: (map['pinned'] ?? false) as bool,
       createdAt:
           DateTime.tryParse((map['created_at'] ?? '') as String) ??
           DateTime.now(),
-      updatedAt:
-          DateTime.tryParse((map['updated_at'] ?? '') as String) ??
-          DateTime.now(),
+      editedAt: DateTime.tryParse((map['edited_at'] ?? '') as String? ?? ''),
       author: author,
-      editedBy: editedBy,
       reactions: reactions,
       myReactions: myReactions,
+      mentionedIds: mentionedIds,
+      replies: replies,
     );
   }
 
   final String id;
   final String taskId;
 
-  /// Quill Delta JSON.
+  /// Set on a reply. Threads stay one level deep — a reply to a reply attaches
+  /// to the same parent, so the conversation cannot march off the right edge.
+  final String? parentId;
   final String body;
-  final Color color;
-  final bool pinned;
   final DateTime createdAt;
-  final DateTime updatedAt;
   final UserProfile? author;
 
-  /// Set when someone other than the author last changed the note.
-  final UserProfile? editedBy;
+  /// Set only when the text was actually changed. Null means untouched, which
+  /// comparing timestamps could not distinguish from an edit a second after
+  /// posting.
+  final DateTime? editedAt;
 
-  /// Emoji → count across the whole team.
+  /// Emoji → how many people used it.
   final Map<String, int> reactions;
 
-  /// Emoji the signed-in user has reacted with.
+  /// Emoji the signed-in user picked, so their own are highlighted.
   final Set<String> myReactions;
 
-  bool get wasEdited => updatedAt.difference(createdAt).inSeconds > 2;
-}
+  /// Who was named with @. Stored rather than re-parsed, so an edit that drops
+  /// the name does not un-notify someone already pinged.
+  final List<String> mentionedIds;
 
-enum TaskStatus {
-  done('Done'),
-  working('Working'),
-  stuck('Stuck'),
-  notStarted('Not started');
+  /// Replies to this message, oldest first. Empty on a reply itself.
+  final List<TaskComment> replies;
 
-  const TaskStatus(this.label);
-  final String label;
+  bool get isReply => parentId != null;
+  bool get wasEdited => editedAt != null;
+  bool get hasReplies => replies.isNotEmpty;
 
-  static TaskStatus fromName(String value) {
-    return TaskStatus.values.firstWhere(
-      (status) => status.name == value,
-      orElse: () => TaskStatus.notStarted,
+  /// "just now", "5m", "3h", "2d" — compact enough to sit beside a name.
+  String get age {
+    final elapsed = DateTime.now().difference(createdAt);
+    if (elapsed.inMinutes < 1) {
+      return 'just now';
+    }
+    if (elapsed.inHours < 1) {
+      return '${elapsed.inMinutes}m';
+    }
+    if (elapsed.inDays < 1) {
+      return '${elapsed.inHours}h';
+    }
+    if (elapsed.inDays < 7) {
+      return '${elapsed.inDays}d';
+    }
+    return '${(elapsed.inDays / 7).floor()}w';
+  }
+
+  TaskComment copyWith({List<TaskComment>? replies}) {
+    return TaskComment(
+      id: id,
+      taskId: taskId,
+      body: body,
+      createdAt: createdAt,
+      parentId: parentId,
+      author: author,
+      editedAt: editedAt,
+      reactions: reactions,
+      myReactions: myReactions,
+      mentionedIds: mentionedIds,
+      replies: replies ?? this.replies,
     );
   }
 }
 
+/// One entry in a task's history.
+class TaskActivity {
+  const TaskActivity({
+    required this.id,
+    required this.kind,
+    required this.detail,
+    required this.createdAt,
+    this.actor,
+  });
+
+  factory TaskActivity.fromMap(Map<String, dynamic> map, {UserProfile? actor}) {
+    return TaskActivity(
+      id: map['id'] as String,
+      kind: ActivityKind.fromName((map['kind'] ?? '') as String),
+      detail: (map['detail'] as Map<String, dynamic>?) ?? const {},
+      createdAt:
+          DateTime.tryParse((map['created_at'] ?? '') as String) ??
+          DateTime.now(),
+      actor: actor,
+    );
+  }
+
+  final String id;
+  final ActivityKind kind;
+
+  /// Structured rather than a sentence, so the wording lives here in the
+  /// client: `{"from": "Working", "to": "Done"}`.
+  final Map<String, dynamic> detail;
+  final DateTime createdAt;
+  final UserProfile? actor;
+
+  String get summary {
+    final who = actor?.displayName ?? 'Someone';
+    final from = detail['from'];
+    final to = detail['to'];
+    return switch (kind) {
+      ActivityKind.created => '$who created this task',
+      ActivityKind.renamed => '$who renamed it to "$to"',
+      ActivityKind.statusChanged => '$who moved it from $from to $to',
+      ActivityKind.priorityChanged => '$who set priority to $to',
+      ActivityKind.assigned => '$who assigned $to',
+      ActivityKind.unassigned => '$who unassigned $to',
+      ActivityKind.dueDateChanged => '$who set the due date to $to',
+      ActivityKind.moved => '$who moved it to $to',
+      ActivityKind.progressChanged => '$who set progress to $to',
+      ActivityKind.noteAdded => '$who added a note',
+      ActivityKind.commentAdded => '$who commented',
+      ActivityKind.deleted => '$who deleted this task',
+      ActivityKind.restored => '$who restored this task',
+    };
+  }
+}
+
+/// Mirrors the `activity_kind` enum. Wire names are snake_case.
+enum ActivityKind {
+  created('created'),
+  renamed('renamed'),
+  statusChanged('status_changed'),
+  priorityChanged('priority_changed'),
+  assigned('assigned'),
+  unassigned('unassigned'),
+  dueDateChanged('due_date_changed'),
+  moved('moved'),
+  progressChanged('progress_changed'),
+  noteAdded('note_added'),
+  commentAdded('comment_added'),
+  deleted('deleted'),
+  restored('restored');
+
+  const ActivityKind(this.wire);
+
+  /// The Postgres enum value, which differs from the Dart name.
+  final String wire;
+
+  static ActivityKind fromName(String value) {
+    return ActivityKind.values.firstWhere(
+      (kind) => kind.wire == value,
+      orElse: () => ActivityKind.created,
+    );
+  }
+}
+
+/// Something the signed-in user needs to know about.
+///
+/// One row per person: a task assigned to three people makes three
+/// notifications, because each is read and dismissed independently.
+class AppNotification {
+  const AppNotification({
+    required this.id,
+    required this.kind,
+    required this.title,
+    required this.createdAt,
+    this.body = '',
+    this.workspaceId,
+    this.taskId,
+    this.boardId,
+    this.inviteId,
+    this.actor,
+    this.readAt,
+  });
+
+  factory AppNotification.fromMap(
+    Map<String, dynamic> map, {
+    UserProfile? actor,
+  }) {
+    return AppNotification(
+      id: map['id'] as String,
+      kind: NotificationKind.fromName((map['kind'] ?? '') as String),
+      title: (map['title'] ?? '') as String,
+      body: (map['body'] ?? '') as String,
+      workspaceId: map['workspace_id'] as String?,
+      taskId: map['task_id'] as String?,
+      boardId: map['board_id'] as String?,
+      inviteId: map['invite_id'] as String?,
+      actor: actor,
+      readAt: DateTime.tryParse((map['read_at'] ?? '') as String? ?? ''),
+      createdAt:
+          DateTime.tryParse((map['created_at'] ?? '') as String) ??
+          DateTime.now(),
+    );
+  }
+
+  final String id;
+  final NotificationKind kind;
+  final String title;
+  final String body;
+
+  /// Where it points, so tapping it can open the right screen. All null for a
+  /// notification that has no destination.
+  final String? workspaceId;
+  final String? taskId;
+  final String? boardId;
+  final String? inviteId;
+
+  /// Who caused it. Null when the system raised it on its own, such as a due
+  /// date passing.
+  final UserProfile? actor;
+
+  final DateTime? readAt;
+  final DateTime createdAt;
+
+  bool get isUnread => readAt == null;
+
+  /// True when acting on this means answering an invitation rather than just
+  /// navigating somewhere.
+  bool get isActionable => kind == NotificationKind.workspaceInvite;
+
+  /// "just now", "5m", "3h", "2d" — compact enough for a notification list.
+  String get age {
+    final elapsed = DateTime.now().difference(createdAt);
+    if (elapsed.inMinutes < 1) {
+      return 'just now';
+    }
+    if (elapsed.inHours < 1) {
+      return '${elapsed.inMinutes}m';
+    }
+    if (elapsed.inDays < 1) {
+      return '${elapsed.inHours}h';
+    }
+    if (elapsed.inDays < 7) {
+      return '${elapsed.inDays}d';
+    }
+    return '${(elapsed.inDays / 7).floor()}w';
+  }
+}
+
+/// Mirrors the `notification_kind` enum. Wire names are snake_case.
+enum NotificationKind {
+  workspaceInvite('workspace_invite', Icons.mail_outline),
+  inviteAccepted('invite_accepted', Icons.how_to_reg_outlined),
+  memberJoined('member_joined', Icons.person_add_alt),
+  roleChanged('role_changed', Icons.badge_outlined),
+  removedFromWorkspace('removed_from_workspace', Icons.person_remove_outlined),
+  taskAssigned('task_assigned', Icons.assignment_ind_outlined),
+  taskUnassigned('task_unassigned', Icons.assignment_late_outlined),
+  taskDueSoon('task_due_soon', Icons.schedule),
+  taskOverdue('task_overdue', Icons.warning_amber_rounded),
+  taskStatusChanged('task_status_changed', Icons.swap_horiz),
+  noteAdded('note_added', Icons.sticky_note_2_outlined),
+  commentAdded('comment_added', Icons.chat_bubble_outline),
+  mentioned('mentioned', Icons.alternate_email);
+
+  const NotificationKind(this.wire, this.icon);
+
+  /// The Postgres enum value, which differs from the Dart name.
+  final String wire;
+  final IconData icon;
+
+  static NotificationKind fromName(String value) {
+    return NotificationKind.values.firstWhere(
+      (kind) => kind.wire == value,
+      orElse: () => NotificationKind.memberJoined,
+    );
+  }
+
+  /// Overdue and invitations want to stand out from routine chatter.
+  bool get isUrgent =>
+      this == NotificationKind.taskOverdue ||
+      this == NotificationKind.workspaceInvite;
+}
+
 enum TaskPriority {
+  urgent('Urgent'),
   high('High'),
   medium('Medium'),
   low('Low');
@@ -381,7 +830,131 @@ enum TaskPriority {
   }
 }
 
-enum ViewMode { table, kanban, calendar }
+/// A custom column a board defines beyond the built-ins.
+class BoardColumn {
+  const BoardColumn({
+    required this.id,
+    required this.boardId,
+    required this.name,
+    required this.kind,
+    required this.position,
+    this.settings = const {},
+    this.width = 160,
+  });
+
+  factory BoardColumn.fromMap(Map<String, dynamic> map) {
+    return BoardColumn(
+      id: map['id'] as String,
+      boardId: (map['board_id'] ?? '') as String,
+      name: (map['name'] ?? '') as String,
+      kind: ColumnKind.fromName((map['kind'] ?? 'text') as String),
+      settings: (map['settings'] as Map<String, dynamic>?) ?? const {},
+      position: (map['position'] as num?)?.toDouble() ?? 0,
+      width: (map['width'] as num?)?.toInt() ?? 160,
+    );
+  }
+
+  final String id;
+  final String boardId;
+  final String name;
+  final ColumnKind kind;
+
+  /// Per-kind config: dropdown choices, number format, formula body.
+  final Map<String, dynamic> settings;
+  final double position;
+  final int width;
+}
+
+/// Mirrors the `column_kind` enum.
+enum ColumnKind {
+  text('Text', 'text'),
+  longText('Long text', 'long_text'),
+  number('Number', 'number'),
+  status('Status', 'status'),
+  people('People', 'people'),
+  date('Date', 'date'),
+  timeline('Timeline', 'timeline'),
+  checkbox('Checkbox', 'checkbox'),
+  rating('Rating', 'rating'),
+  dropdown('Dropdown', 'dropdown'),
+  link('Link', 'link'),
+  email('Email', 'email'),
+  phone('Phone', 'phone'),
+  formula('Formula', 'formula');
+
+  const ColumnKind(this.label, this.wire);
+  final String label;
+  final String wire;
+
+  static ColumnKind fromName(String value) {
+    return ColumnKind.values.firstWhere(
+      (kind) => kind.wire == value,
+      orElse: () => ColumnKind.text,
+    );
+  }
+}
+
+/// A saved view: a board presented one way, with its own filters and sort.
+class BoardView {
+  const BoardView({
+    required this.id,
+    required this.boardId,
+    required this.name,
+    required this.kind,
+    required this.position,
+    this.config = const {},
+    this.isShared = true,
+    this.createdBy,
+  });
+
+  factory BoardView.fromMap(Map<String, dynamic> map) {
+    return BoardView(
+      id: map['id'] as String,
+      boardId: (map['board_id'] ?? '') as String,
+      name: (map['name'] ?? '') as String,
+      kind: ViewMode.fromName((map['kind'] ?? 'table') as String),
+      config: (map['config'] as Map<String, dynamic>?) ?? const {},
+      position: (map['position'] as num?)?.toDouble() ?? 0,
+      isShared: (map['is_shared'] ?? true) as bool,
+      createdBy: map['created_by'] as String?,
+    );
+  }
+
+  final String id;
+  final String boardId;
+  final String name;
+  final ViewMode kind;
+
+  /// Filters, sort and grouping, opaque to the database.
+  final Map<String, dynamic> config;
+  final double position;
+
+  /// Personal views are visible only to their creator.
+  final bool isShared;
+  final String? createdBy;
+}
+
+/// Mirrors the `view_kind` enum. Only the first three are implemented in the
+/// UI; the rest are accepted by the database so a view can be saved before its
+/// renderer exists.
+enum ViewMode {
+  table('Table'),
+  kanban('Kanban'),
+  calendar('Calendar'),
+  timeline('Timeline'),
+  gantt('Gantt'),
+  chart('Chart');
+
+  const ViewMode(this.label);
+  final String label;
+
+  static ViewMode fromName(String value) {
+    return ViewMode.values.firstWhere(
+      (mode) => mode.name == value,
+      orElse: () => ViewMode.table,
+    );
+  }
+}
 
 enum TaskOrder {
   manual('Manual'),

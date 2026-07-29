@@ -189,20 +189,13 @@ class AuthService {
     await _auth.getSessionFromUrl(uri);
   }
 
-  /// Turns invitations addressed to this user's email into memberships. Safe to
-  /// call on every sign-in; a no-op when nothing is pending.
-  Future<int> acceptPendingInvites() async {
-    try {
-      final result = await _client.rpc<dynamic>('accept_pending_invites');
-      if (result is int) {
-        return result;
-      }
-      return int.tryParse('$result') ?? 0;
-    } catch (_) {
-      // Never block sign-in on invite claiming.
-      return 0;
-    }
-  }
+  // Invitations are deliberately NOT claimed here.
+  //
+  // Signing in used to call accept_pending_invites(), which turned every
+  // pending invitation into a membership before the person saw it: no
+  // notification, no choice, and declining was impossible because the row was
+  // already accepted by the time the bell rendered. They now wait in the
+  // notification centre until accepted or declined.
 }
 
 /// Listens for `planner://` callbacks and completes the sign-in they carry.
@@ -249,7 +242,6 @@ class DeepLinkHandler {
 
     try {
       await _auth.completeSessionFromUrl(uri);
-      await _auth.acceptPendingInvites();
       onSuccess?.call();
     } catch (error) {
       onError?.call(describeAuthError(error));

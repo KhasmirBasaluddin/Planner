@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 
 import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
@@ -46,11 +49,19 @@ class _MembersDialogState extends State<_MembersDialog> {
 
   List<WorkspaceMember> _members = [];
   List<WorkspaceInvite> _invites = [];
+
+  /// People matching what has been typed. Already-members and already-invited
+  /// are filtered out server-side, so everything here can be invited.
+  List<UserProfile> _matches = [];
+  Timer? _searchDebounce;
+
   WorkspaceRole _inviteRole = WorkspaceRole.member;
   bool _loading = true;
   bool _inviting = false;
+  bool _searching = false;
   String? _error;
   late String _joinCode = widget.workspace.joinCode;
+  RealtimeChannel? _teamChannel;
 
   Future<void> _regenerateCode() async {
     try {
@@ -73,11 +84,27 @@ class _MembersDialogState extends State<_MembersDialog> {
   void initState() {
     super.initState();
     _load();
+    // Membership and invitations are live: a teammate joining by code, an
+    // invitation being answered, or another admin changing a role all show up
+    // here without anyone reopening the dialog.
+    _teamChannel = widget.repository.subscribeToTeam(
+      workspaceId: widget.workspace.id,
+      onChange: () {
+        if (mounted) {
+          _load();
+        }
+      },
+    );
   }
 
   @override
   void dispose() {
+    _searchDebounce?.cancel();
     _emailController.dispose();
+    final channel = _teamChannel;
+    if (channel != null) {
+      widget.repository.unsubscribe(channel);
+    }
     super.dispose();
   }
 
@@ -103,11 +130,100 @@ class _MembersDialogState extends State<_MembersDialog> {
     }
   }
 
+  /// Looks up people as the user types.
+  ///
+  /// Debounced: a request per keystroke would be several per word, and the
+  /// server refuses anything under two characters anyway.
+  void _onSearchChanged(String value) {
+    _searchDebounce?.cancel();
+    final query = value.trim();
+
+    if (query.length < 2) {
+      setState(() {
+        _matches = [];
+        _searching = false;
+      });
+      return;
+    }
+
+    setState(() => _searching = true);
+    _searchDebounce = Timer(const Duration(milliseconds: 250), () async {
+      try {
+        final matches = await widget.repository.searchInvitableUsers(
+          workspaceId: widget.workspace.id,
+          query: query,
+        );
+        if (mounted && _emailController.text.trim() == query) {
+          setState(() {
+            _matches = matches;
+            _searching = false;
+          });
+        }
+      } catch (_) {
+        // A failed lookup should not block inviting by email, which still
+        // works for someone who has no account yet.
+        if (mounted) {
+          setState(() {
+            _matches = [];
+            _searching = false;
+          });
+        }
+      }
+    });
+  }
+
+  /// Invites someone who already has an account, linked by id rather than by
+  /// a string that has to match later.
+  Future<void> _inviteUser(UserProfile profile) async {
+    setState(() {
+      _inviting = true;
+      _error = null;
+    });
+
+    try {
+      await widget.repository.inviteUser(
+        workspaceId: widget.workspace.id,
+        userId: profile.id,
+        role: _inviteRole,
+      );
+      _emailController.clear();
+      setState(() => _matches = []);
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(content: Text('Invited ${profile.displayName}')),
+          );
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => _error = _describe(error));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _inviting = false);
+      }
+    }
+  }
+
+  /// Invites by raw email, for someone who has not signed up yet — the one
+  /// case where there is no account to point at.
   Future<void> _invite() async {
     if (!(_formKey.currentState?.validate() ?? false)) {
       return;
     }
     final email = _emailController.text.trim().toLowerCase();
+
+    // If they do have an account, link the invitation to it rather than
+    // leaving it addressed to a string.
+    final known = _matches
+        .where((profile) => profile.email.toLowerCase() == email)
+        .firstOrNull;
+    if (known != null) {
+      await _inviteUser(known);
+      return;
+    }
 
     // Catch the common case before hitting the network.
     if (_members.any((m) => m.profile.email.toLowerCase() == email)) {
@@ -127,6 +243,7 @@ class _MembersDialogState extends State<_MembersDialog> {
         role: _inviteRole,
       );
       _emailController.clear();
+      setState(() => _matches = []);
       await _load();
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -135,13 +252,21 @@ class _MembersDialogState extends State<_MembersDialog> {
       }
     } catch (error) {
       if (mounted) {
-        setState(() => _error = error.toString());
+        setState(() => _error = _describe(error));
       }
     } finally {
       if (mounted) {
         setState(() => _inviting = false);
       }
     }
+  }
+
+  /// StateError carries a message written for the user; anything else does not.
+  String _describe(Object error) {
+    if (error is StateError) {
+      return error.message;
+    }
+    return error.toString();
   }
 
   Future<void> _removeMember(WorkspaceMember member) async {
@@ -195,15 +320,21 @@ class _MembersDialogState extends State<_MembersDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildHeader(),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 4, 24, 20),
-              child: JoinCodeCard(
-                code: _joinCode,
-                canManage: _canManage,
-                onRegenerate: _regenerateCode,
+            // The join code grants access to anyone holding it, so it belongs
+            // with the people who decide who has access. Showing it to members
+            // let them hand out entry to a workspace they cannot manage.
+            if (_canManage) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(24, 4, 24, 20),
+                child: JoinCodeCard(
+                  code: _joinCode,
+                  canManage: _canManage,
+                  onRegenerate: _regenerateCode,
+                ),
               ),
-            ),
-            if (_canManage) _buildInviteRow(),
+              _buildInviteRow(),
+            ] else
+              const SizedBox(height: 4),
             if (_error != null) _buildError(),
             const Divider(height: 1),
             Flexible(
@@ -285,73 +416,183 @@ class _MembersDialogState extends State<_MembersDialog> {
   }
 
   Widget _buildInviteRow() {
+    final typed = _emailController.text.trim();
+    // Only offer the raw-email fallback once what has been typed actually looks
+    // like an address and matches nobody — otherwise it reads as a suggestion
+    // to invite a half-finished string.
+    final showEmailFallback =
+        typed.contains('@') &&
+        !_searching &&
+        _matches.every((p) => p.email.toLowerCase() != typed.toLowerCase());
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
       child: Form(
         key: _formKey,
-        child: Row(
+        child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Expanded(
-              child: TextFormField(
-                controller: _emailController,
-                keyboardType: TextInputType.emailAddress,
-                onFieldSubmitted: (_) => _inviting ? null : _invite(),
-                decoration: const InputDecoration(
-                  hintText: 'teammate@vintazk.com',
-                  prefixIcon: Icon(
-                    Icons.mail_outline_rounded,
-                    size: 17,
-                    color: plannerFaint,
-                  ),
-                  prefixIconConstraints: BoxConstraints(
-                    minWidth: 38,
-                    minHeight: 38,
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextFormField(
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    onChanged: _onSearchChanged,
+                    onFieldSubmitted: (_) => _inviting ? null : _invite(),
+                    decoration: InputDecoration(
+                      hintText: 'Search by name, or type an email',
+                      prefixIcon: const Icon(
+                        Icons.person_search_outlined,
+                        size: 17,
+                        color: plannerFaint,
+                      ),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 38,
+                        minHeight: 38,
+                      ),
+                      suffixIcon: _searching
+                          ? const Padding(
+                              padding: EdgeInsets.all(12),
+                              child: SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: plannerFaint,
+                                ),
+                              ),
+                            )
+                          : null,
+                    ),
+                    validator: (value) {
+                      final email = (value ?? '').trim();
+                      if (email.isEmpty) {
+                        return 'Search for a teammate, or enter an email.';
+                      }
+                      // Only an address needs validating; picking someone from
+                      // the list never runs this.
+                      if (!RegExp(
+                        r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
+                      ).hasMatch(email)) {
+                        return 'Pick someone from the list, or enter a full '
+                            'email address.';
+                      }
+                      if (!isAllowedCompanyEmail(email)) {
+                        return 'Use an @vintazk.com email address.';
+                      }
+                      return null;
+                    },
                   ),
                 ),
-                validator: (value) {
-                  final email = (value ?? '').trim();
-                  if (email.isEmpty) {
-                    return 'Enter an email to invite.';
-                  }
-                  if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-                    return 'That does not look like an email address.';
-                  }
-                  if (!isAllowedCompanyEmail(email)) {
-                    return 'Use an @vintazk.com email address.';
-                  }
-                  return null;
-                },
-              ),
-            ),
-            const SizedBox(width: 8),
-            _RolePicker(
-              role: _inviteRole,
-              // Ownership transfers are not part of inviting.
-              options: const [
-                WorkspaceRole.admin,
-                WorkspaceRole.member,
-                WorkspaceRole.viewer,
+                const SizedBox(width: 8),
+                _RolePicker(
+                  role: _inviteRole,
+                  // Ownership transfers are not part of inviting.
+                  options: const [
+                    WorkspaceRole.admin,
+                    WorkspaceRole.member,
+                    WorkspaceRole.viewer,
+                  ],
+                  onChanged: (role) => setState(() => _inviteRole = role),
+                ),
+                const SizedBox(width: 8),
+                SizedBox(
+                  height: 42,
+                  child: FilledButton(
+                    onPressed: _inviting ? null : _invite,
+                    child: _inviting
+                        ? const SizedBox(
+                            width: 15,
+                            height: 15,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : const Text('Invite'),
+                  ),
+                ),
               ],
-              onChanged: (role) => setState(() => _inviteRole = role),
             ),
-            const SizedBox(width: 8),
-            SizedBox(
-              height: 42,
-              child: FilledButton(
-                onPressed: _inviting ? null : _invite,
-                child: _inviting
-                    ? const SizedBox(
-                        width: 15,
-                        height: 15,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
+            if (_matches.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                constraints: const BoxConstraints(maxHeight: 176),
+                decoration: BoxDecoration(
+                  color: plannerCard,
+                  borderRadius: BorderRadius.circular(radiusSm),
+                  border: Border.all(color: plannerBorder),
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  padding: EdgeInsets.zero,
+                  itemCount: _matches.length,
+                  itemBuilder: (context, index) {
+                    final profile = _matches[index];
+                    return InkWell(
+                      onTap: _inviting ? null : () => _inviteUser(profile),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                      )
-                    : const Text('Invite'),
+                        child: Row(
+                          children: [
+                            UserAvatar(
+                              profile: profile,
+                              size: 28,
+                              showTooltip: false,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    profile.displayName,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: plannerInk,
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  Text(
+                                    profile.email,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: plannerMuted,
+                                      fontSize: 11.5,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(
+                              Icons.add_circle_outline_rounded,
+                              size: 17,
+                              color: plannerBlue,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
-            ),
+            ],
+            if (showEmailFallback) ...[
+              const SizedBox(height: 6),
+              Text(
+                _matches.isEmpty
+                    ? 'Nobody here by that name. Invite $typed by email — they '
+                          'will join when they sign up.'
+                    : 'Or invite $typed by email.',
+                style: const TextStyle(color: plannerMuted, fontSize: 11.5),
+              ),
+            ],
           ],
         ),
       ),

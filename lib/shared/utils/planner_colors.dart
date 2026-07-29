@@ -126,19 +126,17 @@ Color tint(Color color, [double amount = 0.10]) {
   return color.withValues(alpha: amount);
 }
 
-Color statusColor(TaskStatus status) {
-  return switch (status) {
-    TaskStatus.done => plannerGreen,
-    TaskStatus.working => plannerYellow,
-    TaskStatus.stuck => plannerRed,
-    TaskStatus.notStarted => plannerSlate,
-  };
-}
+/// The color a board gave this status, falling back to grey when a task has
+/// none — which happens only if the label was deleted out from under it.
+Color statusColor(StatusLabel? status) => status?.color ?? plannerSlate;
 
 Color priorityColor(TaskPriority priority) {
   return switch (priority) {
-    TaskPriority.high => plannerRed,
-    TaskPriority.medium => plannerOrange,
+    // Urgent has to out-shout High, so it takes red and High steps down to
+    // orange, pushing Medium to yellow.
+    TaskPriority.urgent => plannerRed,
+    TaskPriority.high => plannerOrange,
+    TaskPriority.medium => plannerYellow,
     TaskPriority.low => plannerSlate,
   };
 }
@@ -155,3 +153,19 @@ Color avatarColor(String seed) {
   }
   return accentPalette[hash % accentPalette.length];
 }
+
+/// The face to render emoji in.
+///
+/// Flutter does not pick an emoji font on its own: the default face is asked
+/// first, has no glyph for a variation-selector sequence like ❤️ or a newer
+/// codepoint like 🎉, and the result is tofu or a mismatched monochrome glyph.
+/// Naming the platform emoji font explicitly is what makes them render.
+const String emojiFontFamily = 'Segoe UI Emoji';
+
+/// Tried in order when the primary face is missing — a Windows build may run
+/// on a machine without it, and the same widgets build on other platforms.
+const List<String> emojiFontFallback = <String>[
+  'Segoe UI Emoji',
+  'Apple Color Emoji',
+  'Noto Color Emoji',
+];

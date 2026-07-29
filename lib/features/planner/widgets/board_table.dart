@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/widgets/user_avatar.dart';
 import 'planner_dialogs.dart';
 
 const double _minTableWidth = 760;
@@ -12,6 +13,7 @@ class BoardTable extends StatefulWidget {
     super.key,
     required this.groups,
     required this.members,
+    required this.statuses,
     required this.collapsedGroupIds,
     required this.onToggleGroup,
     required this.onRenameGroup,
@@ -20,23 +22,27 @@ class BoardTable extends StatefulWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onOpenNotes,
+    required this.onOpenChat,
     this.onTaskReorder,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
+
+  /// The board's statuses, in display order — the choices the status menu
+  /// offers and the source for resolving a task's label.
+  final List<StatusLabel> statuses;
   final Set<String> collapsedGroupIds;
   final ValueChanged<TaskGroup> onToggleGroup;
   final ValueChanged<TaskGroup> onRenameGroup;
   final ValueChanged<TaskGroup> onDeleteGroup;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, TaskStatus status)
+  final Future<void> Function(PlannerTask task, StatusLabel status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -95,6 +101,8 @@ class _BoardTableState extends State<BoardTable> {
                     for (final group in widget.groups) ...[
                       GroupSection(
                         group: group,
+                        members: widget.members,
+                        statuses: widget.statuses,
                         collapsed: widget.collapsedGroupIds.contains(group.id),
                         onToggle: () => widget.onToggleGroup(group),
                         onRename: () => widget.onRenameGroup(group),
@@ -103,7 +111,7 @@ class _BoardTableState extends State<BoardTable> {
                         onDeleteTask: widget.onDeleteTask,
                         onStatusChanged: widget.onStatusChanged,
                         onProgressChanged: widget.onProgressChanged,
-                        onOpenNotes: widget.onOpenNotes,
+                        onOpenChat: widget.onOpenChat,
                         onTaskReorder: widget.onTaskReorder,
                       ),
                       const SizedBox(height: 22),
@@ -181,6 +189,8 @@ class GroupSection extends StatelessWidget {
   const GroupSection({
     super.key,
     required this.group,
+    required this.members,
+    required this.statuses,
     required this.collapsed,
     required this.onToggle,
     required this.onRename,
@@ -189,22 +199,24 @@ class GroupSection extends StatelessWidget {
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onOpenNotes,
+    required this.onOpenChat,
     this.onTaskReorder,
   });
 
   final TaskGroup group;
+  final List<WorkspaceMember> members;
+  final List<StatusLabel> statuses;
   final bool collapsed;
   final VoidCallback onToggle;
   final VoidCallback onRename;
   final VoidCallback onDelete;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, TaskStatus status)
+  final Future<void> Function(PlannerTask task, StatusLabel status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -304,11 +316,13 @@ class GroupSection extends StatelessWidget {
                       task: entry.$2,
                       rowIndex: entry.$1,
                       groupColor: group.color,
+                      members: members,
+                      statuses: statuses,
                       onEditTask: onEditTask,
                       onDeleteTask: onDeleteTask,
                       onStatusChanged: onStatusChanged,
                       onProgressChanged: onProgressChanged,
-                      onOpenNotes: onOpenNotes,
+                      onOpenChat: onOpenChat,
                       dragEnabled: onTaskReorder != null,
                     ),
                 ],
@@ -348,28 +362,33 @@ class TaskRow extends StatelessWidget {
     required this.task,
     required this.rowIndex,
     required this.groupColor,
+    required this.members,
+    required this.statuses,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onOpenNotes,
+    required this.onOpenChat,
     required this.dragEnabled,
   });
 
   final PlannerTask task;
   final int rowIndex;
   final Color groupColor;
+  final List<WorkspaceMember> members;
+  final List<StatusLabel> statuses;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, TaskStatus status)
+  final Future<void> Function(PlannerTask task, StatusLabel status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
   final bool dragEnabled;
 
   @override
   Widget build(BuildContext context) {
+    final status = statusById(statuses, task.statusId);
     final row = Container(
       height: _rowHeight,
       decoration: const BoxDecoration(
@@ -404,7 +423,7 @@ class TaskRow extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 8),
-                  NoteButton(task: task, onOpenNotes: onOpenNotes),
+                  ChatButton(task: task, onOpenChat: onOpenChat),
                   const SizedBox(width: 4),
                 ],
               ),
@@ -412,13 +431,20 @@ class TaskRow extends StatelessWidget {
           ),
           Expanded(
             flex: 8,
-            child: Center(child: OwnerAvatar(label: task.owner)),
+            child: Center(
+              child: AssigneeAvatars(task: task, members: members),
+            ),
           ),
           Expanded(
             flex: 13,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: StatusMenu(task: task, onChanged: onStatusChanged),
+              child: StatusMenu(
+                task: task,
+                status: status,
+                statuses: statuses,
+                onChanged: onStatusChanged,
+              ),
             ),
           ),
           Expanded(
@@ -432,7 +458,7 @@ class TaskRow extends StatelessWidget {
             flex: 9,
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: DueDateCell(task: task),
+              child: DueDateCell(task: task, status: status),
             ),
           ),
           Expanded(
@@ -441,6 +467,7 @@ class TaskRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 10),
               child: TimelineCell(
                 task: task,
+                status: status,
                 onProgressChanged: (progress) {
                   onProgressChanged(task, progress);
                 },
@@ -491,22 +518,59 @@ class _DragHandle extends StatelessWidget {
   }
 }
 
-class OwnerAvatar extends StatelessWidget {
-  const OwnerAvatar({super.key, required this.label});
+/// The people on a task, or a muted placeholder when it is unassigned.
+///
+/// Assignments are stored as ids, so anyone no longer in the workspace simply
+/// drops out of the row rather than showing as a stale name.
+class AssigneeAvatars extends StatelessWidget {
+  const AssigneeAvatars({
+    super.key,
+    required this.task,
+    required this.members,
+    this.size = 26,
+    this.maxVisible = 2,
+  });
 
-  final String label;
+  final PlannerTask task;
+  final List<WorkspaceMember> members;
+  final double size;
+  final int maxVisible;
 
   @override
   Widget build(BuildContext context) {
-    return CircleAvatar(
-      radius: 13,
-      backgroundColor: const Color(0xFFE9EBF1),
-      child: Text(
-        label,
-        style: const TextStyle(
-          color: plannerText,
-          fontWeight: FontWeight.w600,
-          fontSize: 10.5,
+    final profiles = assigneeProfiles(task, members);
+    if (profiles.isEmpty) {
+      return _UnassignedAvatar(size: size);
+    }
+    return AvatarStack(
+      profiles: profiles,
+      size: size,
+      maxVisible: maxVisible,
+    );
+  }
+}
+
+class _UnassignedAvatar extends StatelessWidget {
+  const _UnassignedAvatar({required this.size});
+
+  final double size;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Unassigned',
+      child: Container(
+        width: size,
+        height: size,
+        decoration: const BoxDecoration(
+          color: Color(0xFFE9EBF1),
+          shape: BoxShape.circle,
+        ),
+        alignment: Alignment.center,
+        child: Icon(
+          Icons.person_outline_rounded,
+          color: plannerFaint,
+          size: size * 0.58,
         ),
       ),
     );
@@ -514,22 +578,33 @@ class OwnerAvatar extends StatelessWidget {
 }
 
 class StatusMenu extends StatelessWidget {
-  const StatusMenu({super.key, required this.task, required this.onChanged});
+  const StatusMenu({
+    super.key,
+    required this.task,
+    required this.status,
+    required this.statuses,
+    required this.onChanged,
+  });
 
   final PlannerTask task;
-  final Future<void> Function(PlannerTask task, TaskStatus status) onChanged;
+
+  /// The task's current label, already resolved. Null when the board deleted
+  /// the label the task pointed at.
+  final StatusLabel? status;
+  final List<StatusLabel> statuses;
+  final Future<void> Function(PlannerTask task, StatusLabel status) onChanged;
 
   @override
   Widget build(BuildContext context) {
-    final color = statusColor(task.status);
+    final color = statusColor(status);
     return Align(
       alignment: Alignment.centerLeft,
-      child: PopupMenuButton<TaskStatus>(
+      child: PopupMenuButton<StatusLabel>(
         tooltip: 'Change status',
-        onSelected: (status) => onChanged(task, status),
-        itemBuilder: (context) => TaskStatus.values.map((status) {
+        onSelected: (choice) => onChanged(task, choice),
+        itemBuilder: (context) => statuses.map((choice) {
           return PopupMenuItem(
-            value: status,
+            value: choice,
             height: 38,
             child: Row(
               children: [
@@ -537,13 +612,13 @@ class StatusMenu extends StatelessWidget {
                   width: 8,
                   height: 8,
                   decoration: BoxDecoration(
-                    color: statusColor(status),
+                    color: statusColor(choice),
                     shape: BoxShape.circle,
                   ),
                 ),
                 const SizedBox(width: 10),
                 Text(
-                  status.label,
+                  choice.name,
                   style: const TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w500,
@@ -573,7 +648,7 @@ class StatusMenu extends StatelessWidget {
               ),
               const SizedBox(width: 6),
               Text(
-                task.status.label,
+                status?.name ?? 'No status',
                 style: TextStyle(
                   color: Color.lerp(color, plannerInk, 0.25),
                   fontWeight: FontWeight.w600,
@@ -626,15 +701,21 @@ class PriorityPill extends StatelessWidget {
 }
 
 class TimelineCell extends StatelessWidget {
-  const TimelineCell({super.key, required this.task, this.onProgressChanged});
+  const TimelineCell({
+    super.key,
+    required this.task,
+    required this.status,
+    this.onProgressChanged,
+  });
 
   final PlannerTask task;
+  final StatusLabel? status;
   final ValueChanged<double>? onProgressChanged;
 
   @override
   Widget build(BuildContext context) {
     final progressPercent = (task.progress * 100).round();
-    final progressColor = statusColor(task.status);
+    final progressColor = statusColor(status);
     final content = Container(
       height: 42,
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -974,9 +1055,10 @@ class _ActionMenuLabel extends StatelessWidget {
 /// The due-date cell. Typed dates let us flag overdue and due-today work,
 /// which the old display-string storage could not support.
 class DueDateCell extends StatelessWidget {
-  const DueDateCell({super.key, required this.task});
+  const DueDateCell({super.key, required this.task, required this.status});
 
   final PlannerTask task;
+  final StatusLabel? status;
 
   @override
   Widget build(BuildContext context) {
@@ -989,8 +1071,9 @@ class DueDateCell extends StatelessWidget {
       );
     }
 
-    final overdue = task.isOverdue;
-    final today = task.isDueToday && task.status != TaskStatus.done;
+    final done = status?.isDone ?? false;
+    final overdue = task.isOverdue(done: done);
+    final today = task.isDueToday && !done;
     final color = overdue
         ? plannerRed
         : (today ? plannerOrange : plannerText);
@@ -1023,6 +1106,28 @@ class DueDateCell extends StatelessWidget {
       ],
     );
   }
+}
+
+/// The label [id] names, or null when the board no longer defines it.
+///
+/// The views hold a plain status list rather than the [Board], so they cannot
+/// use `Board.statusById`.
+StatusLabel? statusById(List<StatusLabel> statuses, String? id) {
+  if (id == null) {
+    return null;
+  }
+  return statuses.where((status) => status.id == id).firstOrNull;
+}
+
+/// The profiles behind a task's assignee ids, in workspace-member order.
+List<UserProfile> assigneeProfiles(
+  PlannerTask task,
+  List<WorkspaceMember> members,
+) {
+  return members
+      .where((member) => task.assigneeIds.contains(member.profile.id))
+      .map((member) => member.profile)
+      .toList();
 }
 
 /// Renders a task's start/end pair, degrading gracefully when only one end is

@@ -11,22 +11,26 @@ class BoardCalendar extends StatefulWidget {
     super.key,
     required this.groups,
     required this.members,
+    required this.statuses,
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onStatusChanged,
     required this.onProgressChanged,
-    required this.onOpenNotes,
+    required this.onOpenChat,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
+
+  /// The board's statuses, used to resolve the label behind each task.
+  final List<StatusLabel> statuses;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final Future<void> Function(PlannerTask task, TaskStatus status)
+  final Future<void> Function(PlannerTask task, StatusLabel status)
   onStatusChanged;
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
 
   @override
   State<BoardCalendar> createState() => _BoardCalendarState();
@@ -71,6 +75,7 @@ class _BoardCalendarState extends State<BoardCalendar> {
                   month: _visibleMonth,
                   tasks: monthTasks,
                   members: widget.members,
+                  statuses: widget.statuses,
                   onPrevious: () => _changeMonth(-1),
                   onNext: () => _changeMonth(1),
                   onToday: _goToToday,
@@ -79,6 +84,7 @@ class _BoardCalendarState extends State<BoardCalendar> {
               : _MonthCalendar(
                   month: _visibleMonth,
                   tasks: monthTasks,
+                  statuses: widget.statuses,
                   onPrevious: () => _changeMonth(-1),
                   onNext: () => _changeMonth(1),
                   onToday: _goToToday,
@@ -106,9 +112,10 @@ class _BoardCalendarState extends State<BoardCalendar> {
       builder: (context) => _TaskDetailsDialog(
         entry: entry,
         members: widget.members,
+        status: statusById(widget.statuses, entry.task.statusId),
         onEditTask: widget.onEditTask,
         onDeleteTask: widget.onDeleteTask,
-        onOpenNotes: widget.onOpenNotes,
+        onOpenChat: widget.onOpenChat,
       ),
     );
   }
@@ -118,6 +125,7 @@ class _MonthCalendar extends StatelessWidget {
   const _MonthCalendar({
     required this.month,
     required this.tasks,
+    required this.statuses,
     required this.onPrevious,
     required this.onNext,
     required this.onToday,
@@ -126,6 +134,7 @@ class _MonthCalendar extends StatelessWidget {
 
   final DateTime month;
   final List<_CalendarTask> tasks;
+  final List<StatusLabel> statuses;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final VoidCallback onToday;
@@ -168,6 +177,7 @@ class _MonthCalendar extends StatelessWidget {
                         date: days[row * 7 + column],
                         currentMonth: month.month,
                         tasks: _tasksForDay(tasks, days[row * 7 + column]),
+                        statuses: statuses,
                         onOpenTask: onOpenTask,
                       ),
                     ),
@@ -185,6 +195,7 @@ class _AgendaCalendar extends StatelessWidget {
     required this.month,
     required this.tasks,
     required this.members,
+    required this.statuses,
     required this.onPrevious,
     required this.onNext,
     required this.onToday,
@@ -194,6 +205,7 @@ class _AgendaCalendar extends StatelessWidget {
   final DateTime month;
   final List<_CalendarTask> tasks;
   final List<WorkspaceMember> members;
+  final List<StatusLabel> statuses;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final VoidCallback onToday;
@@ -231,6 +243,7 @@ class _AgendaCalendar extends StatelessWidget {
               date: day,
               tasks: _tasksForDay(tasks, day),
               members: members,
+              statuses: statuses,
               onOpenTask: onOpenTask,
             ),
             const SizedBox(height: 10),
@@ -295,10 +308,7 @@ class _CalendarHeader extends StatelessWidget {
               ],
             ),
           ),
-          OutlinedButton(
-            onPressed: onToday,
-            child: const Text('Today'),
-          ),
+          OutlinedButton(onPressed: onToday, child: const Text('Today')),
         ],
       ),
     );
@@ -354,12 +364,14 @@ class _DayCell extends StatelessWidget {
     required this.date,
     required this.currentMonth,
     required this.tasks,
+    required this.statuses,
     required this.onOpenTask,
   });
 
   final DateTime date;
   final int currentMonth;
   final List<_CalendarTask> tasks;
+  final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
@@ -409,7 +421,11 @@ class _DayCell extends StatelessWidget {
           ),
           const SizedBox(height: 7),
           for (final entry in visibleTasks) ...[
-            _CalendarTaskChip(entry: entry, onOpenTask: onOpenTask),
+            _CalendarTaskChip(
+              entry: entry,
+              status: statusById(statuses, entry.task.statusId),
+              onOpenTask: onOpenTask,
+            ),
             const SizedBox(height: 5),
           ],
           if (hiddenCount > 0)
@@ -431,12 +447,14 @@ class _AgendaDay extends StatelessWidget {
     required this.date,
     required this.tasks,
     required this.members,
+    required this.statuses,
     required this.onOpenTask,
   });
 
   final DateTime date;
   final List<_CalendarTask> tasks;
   final List<WorkspaceMember> members;
+  final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
@@ -464,6 +482,7 @@ class _AgendaDay extends StatelessWidget {
             _AgendaTaskCard(
               entry: entry,
               members: members,
+              status: statusById(statuses, entry.task.statusId),
               onOpenTask: onOpenTask,
             ),
             if (entry != tasks.last) const SizedBox(height: 8),
@@ -475,15 +494,20 @@ class _AgendaDay extends StatelessWidget {
 }
 
 class _CalendarTaskChip extends StatelessWidget {
-  const _CalendarTaskChip({required this.entry, required this.onOpenTask});
+  const _CalendarTaskChip({
+    required this.entry,
+    required this.status,
+    required this.onOpenTask,
+  });
 
   final _CalendarTask entry;
+  final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
-    final color = statusColor(task.status);
+    final color = statusColor(status);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -528,20 +552,19 @@ class _AgendaTaskCard extends StatelessWidget {
   const _AgendaTaskCard({
     required this.entry,
     required this.members,
+    required this.status,
     required this.onOpenTask,
   });
 
   final _CalendarTask entry;
   final List<WorkspaceMember> members;
+  final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
-    final color = statusColor(task.status);
-    final assignee = members
-        .where((member) => member.profile.id == task.assigneeId)
-        .firstOrNull;
+    final color = statusColor(status);
     return Material(
       color: Colors.transparent,
       child: InkWell(
@@ -581,20 +604,14 @@ class _AgendaTaskCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '${entry.group.name} · ${task.status.label}',
+                      '${entry.group.name} · ${status?.name ?? 'No status'}',
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: plannerMuted,
-                        fontSize: 12,
-                      ),
+                      style: const TextStyle(color: plannerMuted, fontSize: 12),
                     ),
                   ],
                 ),
               ),
-              if (assignee != null)
-                UserAvatar(profile: assignee.profile, size: 26)
-              else
-                OwnerAvatar(label: task.owner),
+              AssigneeAvatars(task: task, members: members),
             ],
           ),
         ),
@@ -603,319 +620,711 @@ class _AgendaTaskCard extends StatelessWidget {
   }
 }
 
+/// What a task looks like when you click it in the calendar.
+///
+/// The previous version was a uniform label/value grid — status, priority,
+/// assignee, due date, timeline, progress, all the same weight — so nothing
+/// read first and the eye had to walk every row. Here the two facts that
+/// actually drive a decision get promoted:
+///
+///   * the due date, framed as time remaining rather than a bare date, because
+///     "in 2 days" is the thing you want and "29 Jul" makes you do the sum
+///   * progress, as a bar you can read at a glance
+///
+/// Everything else is supporting detail, set as chips rather than rows so it
+/// occupies a band instead of a column.
 class _TaskDetailsDialog extends StatelessWidget {
   const _TaskDetailsDialog({
     required this.entry,
     required this.members,
+    required this.status,
     required this.onEditTask,
     required this.onDeleteTask,
-    required this.onOpenNotes,
+    required this.onOpenChat,
   });
 
   final _CalendarTask entry;
   final List<WorkspaceMember> members;
+  final StatusLabel? status;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
-  final ValueChanged<PlannerTask> onOpenNotes;
+  final ValueChanged<PlannerTask> onOpenChat;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
-    final statusTone = statusColor(task.status);
-    final progressPercent = (task.progress * 100).round();
-    final assignee = members
-        .where((member) => member.profile.id == task.assigneeId)
-        .firstOrNull;
+    final tone = statusColor(status);
+    final assignees = assigneeProfiles(task, members);
 
     return Dialog(
+      backgroundColor: Colors.transparent,
       insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 460),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 20, 16, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          task.title,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: plannerInk,
-                            fontSize: 17,
-                            fontWeight: FontWeight.w600,
-                            height: 1.3,
-                          ),
-                        ),
-                        const SizedBox(height: 4),
-                        Row(
-                          children: [
-                            Container(
-                              width: 7,
-                              height: 7,
-                              decoration: BoxDecoration(
-                                color: entry.group.color,
-                                shape: BoxShape.circle,
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Flexible(
-                              child: Text(
-                                entry.group.name,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  color: plannerMuted,
-                                  fontSize: 12.5,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  NoteButton(task: task, onOpenNotes: onOpenNotes),
-                  IconButton(
-                    tooltip: 'Close',
-                    onPressed: () => Navigator.of(context).pop(),
-                    icon: const Icon(
-                      Icons.close_rounded,
-                      color: plannerMuted,
-                      size: 20,
-                    ),
-                  ),
-                ],
+        constraints: const BoxConstraints(maxWidth: 440),
+        child: Container(
+          decoration: BoxDecoration(
+            color: plannerCard,
+            borderRadius: BorderRadius.circular(radiusLg),
+            boxShadow: shadowLg,
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _DetailsHeader(
+                task: task,
+                group: entry.group,
+                status: status,
+                tone: tone,
+                onOpenChat: onOpenChat,
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
-              child: Column(
-                children: [
-                  _DetailRow(
-                    label: 'Status',
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 7,
-                          height: 7,
-                          decoration: BoxDecoration(
-                            color: statusTone,
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(task.status.label, style: _detailValueStyle),
-                      ],
-                    ),
-                  ),
-                  _DetailRow(
-                    label: 'Priority',
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.flag_rounded,
-                          size: 12,
-                          color: priorityColor(task.priority),
-                        ),
-                        const SizedBox(width: 6),
-                        Text(task.priority.label, style: _detailValueStyle),
-                      ],
-                    ),
-                  ),
-                  _DetailRow(
-                    label: 'Owner',
-                    child: assignee == null
-                        ? Text(task.owner, style: _detailValueStyle)
-                        : Row(
-                            children: [
-                              UserAvatar(profile: assignee.profile, size: 20),
-                              const SizedBox(width: 8),
-                              Flexible(
-                                child: Text(
-                                  assignee.profile.displayName,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: _detailValueStyle,
-                                ),
-                              ),
-                            ],
-                          ),
-                  ),
-                  _DetailRow(
-                    label: 'Due date',
-                    child: _DateText(date: task.dueDate),
-                  ),
-                  _DetailRow(
-                    label: 'Timeline',
-                    child: _TimelineText(
-                      start: task.startDate,
-                      end: task.endDate,
-                    ),
-                  ),
-                  _DetailRow(
-                    label: 'Progress',
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: ClipRRect(
-                            borderRadius: BorderRadius.circular(99),
-                            child: LinearProgressIndicator(
-                              value: task.progress,
-                              minHeight: 4,
-                              backgroundColor: const Color(0xFFE8EAF1),
-                              valueColor: AlwaysStoppedAnimation<Color>(
-                                statusTone,
-                              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // The two facts worth leading with, side by side.
+                    //
+                    // IntrinsicHeight so the two cards match: `stretch` alone
+                    // needs a bounded height, and inside a min-size Column it
+                    // gets infinity — which crashes layout and, downstream,
+                    // fills the console with mouse-tracker assertions from the
+                    // frame that never completed.
+                    IntrinsicHeight(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: _DueCard(
+                              due: task.dueDate,
+                              done: status?.isDone ?? false,
                             ),
                           ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text('$progressPercent%', style: _detailValueStyle),
-                      ],
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _ProgressCard(
+                              progress: task.progress,
+                              tone: tone,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  _DetailRow(
-                    label: 'Notes',
-                    child: Text(
-                      task.noteCount == 0
-                          ? 'No notes'
-                          : '${task.noteCount} '
-                                '${task.noteCount == 1 ? 'note' : 'notes'}',
-                      style: task.noteCount == 0
-                          ? _detailPlaceholderStyle
-                          : _detailValueStyle,
+                    const SizedBox(height: 14),
+                    _DetailChips(
+                      task: task,
+                      status: status,
+                      assignees: assignees,
+                      tone: tone,
                     ),
-                  ),
-                ],
+                    if (task.startDate != null || task.endDate != null) ...[
+                      const SizedBox(height: 12),
+                      _TimelineStrip(
+                        start: task.startDate,
+                        end: task.endDate,
+                        tone: tone,
+                      ),
+                    ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-              decoration: const BoxDecoration(
-                border: Border(top: BorderSide(color: plannerBorder)),
+              _DetailsActions(
+                task: task,
+                onEditTask: onEditTask,
+                onDeleteTask: onDeleteTask,
               ),
-              child: Row(
-                children: [
-                  TextButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      onDeleteTask(task);
-                    },
-                    style: TextButton.styleFrom(foregroundColor: plannerRed),
-                    child: const Text('Delete'),
-                  ),
-                  const Spacer(),
-                  OutlinedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: () {
-                      Navigator.of(context).pop();
-                      onEditTask(task);
-                    },
-                    child: const Text('Edit task'),
-                  ),
-                ],
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 }
 
-const TextStyle _detailValueStyle = TextStyle(
-  color: plannerInk,
-  fontSize: 13,
-  fontWeight: FontWeight.w500,
-);
+/// Title, group and status, on a wash of the status colour.
+///
+/// The tint does the work a "Status: Not started" row used to: you know where
+/// the task stands before reading a word.
+class _DetailsHeader extends StatelessWidget {
+  const _DetailsHeader({
+    required this.task,
+    required this.group,
+    required this.status,
+    required this.tone,
+    required this.onOpenChat,
+  });
 
-const TextStyle _detailPlaceholderStyle = TextStyle(
-  color: plannerFaint,
-  fontSize: 13,
-  fontWeight: FontWeight.w500,
-);
+  final PlannerTask task;
+  final TaskGroup group;
+  final StatusLabel? status;
+  final Color tone;
+  final ValueChanged<PlannerTask> onOpenChat;
 
-/// A single date, or a muted placeholder when it is unset.
-class _DateText extends StatelessWidget {
-  const _DateText({required this.date});
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(20, 18, 12, 16),
+      decoration: BoxDecoration(
+        color: Color.alphaBlend(tint(tone, 0.09), plannerCard),
+        border: const Border(bottom: BorderSide(color: plannerDivider)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: tone,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        status?.name ?? 'No status',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: tone,
+                          fontSize: 10.5,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.4,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      '·',
+                      style: TextStyle(color: plannerFaint, fontSize: 11),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        group.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerMuted,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  task.title,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: plannerInk,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    height: 1.25,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          _HeaderChatButton(task: task, onOpenChat: onOpenChat),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 18),
+            color: plannerMuted,
+            tooltip: 'Close',
+            visualDensity: VisualDensity.compact,
+            onPressed: () => Navigator.of(context).pop(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The chat button, carrying its message count.
+class _HeaderChatButton extends StatelessWidget {
+  const _HeaderChatButton({required this.task, required this.onOpenChat});
+
+  final PlannerTask task;
+  final ValueChanged<PlannerTask> onOpenChat;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = task.commentCount;
+
+    return Tooltip(
+      message: count == 0
+          ? 'Open chat'
+          : '$count ${count == 1 ? 'message' : 'messages'}',
+      child: InkWell(
+        onTap: () {
+          Navigator.of(context).pop();
+          onOpenChat(task);
+        },
+        borderRadius: BorderRadius.circular(radiusSm),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                count > 0
+                    ? Icons.forum_rounded
+                    : Icons.chat_bubble_outline_rounded,
+                size: 15,
+                color: count > 0 ? plannerBlue : plannerMuted,
+              ),
+              if (count > 0) ...[
+                const SizedBox(width: 5),
+                Text(
+                  '$count',
+                  style: const TextStyle(
+                    color: plannerBlue,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The due date, framed as time remaining.
+///
+/// "in 2 days" is the fact; "29 Jul" is the raw material for working it out.
+/// Overdue turns red, because that is the one state worth interrupting for.
+class _DueCard extends StatelessWidget {
+  const _DueCard({required this.due, required this.done});
+
+  final DateTime? due;
+  final bool done;
+
+  @override
+  Widget build(BuildContext context) {
+    final date = due;
+    if (date == null) {
+      return const _StatCard(
+        label: 'DUE',
+        value: 'No date',
+        muted: true,
+        icon: Icons.event_busy_outlined,
+      );
+    }
+
+    final today = DateTime.now();
+    final days = DateTime(
+      date.year,
+      date.month,
+      date.day,
+    ).difference(DateTime(today.year, today.month, today.day)).inDays;
+
+    // A finished task is never late, however far past its date it sits.
+    final overdue = days < 0 && !done;
+    final tone = overdue
+        ? plannerRed
+        : (days <= 2 && !done ? plannerOrange : plannerInk);
+
+    final relative = switch (days) {
+      < -1 => '${-days} days overdue',
+      -1 => 'Yesterday',
+      0 => 'Today',
+      1 => 'Tomorrow',
+      < 7 => 'In $days days',
+      _ => formatDate(date),
+    };
+
+    return _StatCard(
+      label: 'DUE',
+      value: relative,
+      // The exact date still shows underneath, so the framing costs nothing.
+      caption: days.abs() < 7 ? formatDate(date) : null,
+      tone: tone,
+      icon: overdue ? Icons.warning_amber_rounded : Icons.event_outlined,
+    );
+  }
+}
+
+class _ProgressCard extends StatelessWidget {
+  const _ProgressCard({required this.progress, required this.tone});
+
+  final double progress;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final percent = (progress * 100).round();
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+      decoration: BoxDecoration(
+        color: plannerSurface,
+        borderRadius: BorderRadius.circular(radiusMd),
+        border: Border.all(color: plannerBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'PROGRESS',
+            style: TextStyle(
+              color: plannerFaint,
+              fontSize: 9.5,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.7,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '$percent%',
+            style: const TextStyle(
+              color: plannerInk,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
+            ),
+          ),
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 5,
+              backgroundColor: tint(tone, 0.18),
+              valueColor: AlwaysStoppedAnimation<Color>(tone),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A labelled figure, sized to sit beside the progress card.
+class _StatCard extends StatelessWidget {
+  const _StatCard({
+    required this.label,
+    required this.value,
+    required this.icon,
+    this.caption,
+    this.tone = plannerInk,
+    this.muted = false,
+  });
+
+  final String label;
+  final String value;
+  final String? caption;
+  final IconData icon;
+  final Color tone;
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 11),
+      decoration: BoxDecoration(
+        color: plannerSurface,
+        borderRadius: BorderRadius.circular(radiusMd),
+        border: Border.all(color: plannerBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Text(
+                label,
+                style: const TextStyle(
+                  color: plannerFaint,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.7,
+                ),
+              ),
+              const Spacer(),
+              Icon(icon, size: 12, color: muted ? plannerFaint : tone),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: muted ? plannerFaint : tone,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              height: 1.1,
+            ),
+          ),
+          SizedBox(height: caption == null ? 7 : 3),
+          if (caption != null)
+            Text(
+              caption!,
+              style: const TextStyle(color: plannerMuted, fontSize: 10.5),
+            )
+          else
+            const SizedBox(height: 5),
+        ],
+      ),
+    );
+  }
+}
+
+/// Priority and assignees as chips.
+///
+/// A band rather than two more label/value rows: these are attributes you scan
+/// for, not figures you read.
+class _DetailChips extends StatelessWidget {
+  const _DetailChips({
+    required this.task,
+    required this.status,
+    required this.assignees,
+    required this.tone,
+  });
+
+  final PlannerTask task;
+  final StatusLabel? status;
+  final List<UserProfile> assignees;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    final priorityTone = priorityColor(task.priority);
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        _Chip(
+          icon: Icons.flag_rounded,
+          label: task.priority.label,
+          tone: priorityTone,
+        ),
+        if (assignees.isEmpty)
+          const _Chip(
+            icon: Icons.person_outline_rounded,
+            label: 'Unassigned',
+            tone: plannerMuted,
+            subdued: true,
+          )
+        else
+          _AssigneeChip(assignees: assignees),
+      ],
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  const _Chip({
+    required this.icon,
+    required this.label,
+    required this.tone,
+    this.subdued = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final Color tone;
+  final bool subdued;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+      decoration: BoxDecoration(
+        color: subdued ? plannerSurface : tint(tone, 0.10),
+        borderRadius: BorderRadius.circular(radiusSm),
+        border: Border.all(color: subdued ? plannerBorder : tint(tone, 0.28)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: tone),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: subdued ? plannerMuted : tone,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Faces plus names, so a task with two assignees says both.
+class _AssigneeChip extends StatelessWidget {
+  const _AssigneeChip({required this.assignees});
+
+  final List<UserProfile> assignees;
+
+  @override
+  Widget build(BuildContext context) {
+    final names = assignees.length == 1
+        ? assignees.single.displayName
+        : '${assignees.length} people';
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(5, 4, 10, 4),
+      decoration: BoxDecoration(
+        color: plannerSurface,
+        borderRadius: BorderRadius.circular(radiusSm),
+        border: Border.all(color: plannerBorder),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AvatarStack(profiles: assignees, size: 20, maxVisible: 3),
+          const SizedBox(width: 8),
+          Text(
+            names,
+            style: const TextStyle(
+              color: plannerText,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Start and end as a span, rather than two dates the reader has to relate.
+class _TimelineStrip extends StatelessWidget {
+  const _TimelineStrip({
+    required this.start,
+    required this.end,
+    required this.tone,
+  });
+
+  final DateTime? start;
+  final DateTime? end;
+  final Color tone;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: plannerSurface,
+        borderRadius: BorderRadius.circular(radiusMd),
+        border: Border.all(color: plannerBorder),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.timeline_rounded, size: 13, color: plannerFaint),
+          const SizedBox(width: 9),
+          _TimelineEnd(date: start, fallback: 'No start'),
+          Expanded(
+            child: Container(
+              height: 2,
+              margin: const EdgeInsets.symmetric(horizontal: 9),
+              decoration: BoxDecoration(
+                color: tint(tone, 0.3),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          _TimelineEnd(date: end, fallback: 'No end'),
+        ],
+      ),
+    );
+  }
+}
+
+class _TimelineEnd extends StatelessWidget {
+  const _TimelineEnd({required this.date, required this.fallback});
 
   final DateTime? date;
+  final String fallback;
 
   @override
   Widget build(BuildContext context) {
     final value = date;
     return Text(
-      value == null ? 'No date' : formatDate(value),
-      style: value == null ? _detailPlaceholderStyle : _detailValueStyle,
+      value == null ? fallback : formatDate(value),
+      style: TextStyle(
+        color: value == null ? plannerFaint : plannerText,
+        fontSize: 11.5,
+        fontWeight: FontWeight.w600,
+      ),
     );
   }
 }
 
-/// "12 Mar – 20 Mar", falling back to whichever end is set.
-class _TimelineText extends StatelessWidget {
-  const _TimelineText({required this.start, required this.end});
+class _DetailsActions extends StatelessWidget {
+  const _DetailsActions({
+    required this.task,
+    required this.onEditTask,
+    required this.onDeleteTask,
+  });
 
-  final DateTime? start;
-  final DateTime? end;
-
-  @override
-  Widget build(BuildContext context) {
-    final from = start;
-    final to = end;
-    final String label;
-    if (from == null && to == null) {
-      label = 'No timeline';
-    } else if (from != null && to != null) {
-      label = '${formatDate(from)} – ${formatDate(to)}';
-    } else if (from != null) {
-      label = 'From ${formatDate(from)}';
-    } else {
-      label = 'Until ${formatDate(to!)}';
-    }
-    return Text(
-      label,
-      overflow: TextOverflow.ellipsis,
-      style: from == null && to == null
-          ? _detailPlaceholderStyle
-          : _detailValueStyle,
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({required this.label, required this.child});
-
-  final String label;
-  final Widget child;
+  final PlannerTask task;
+  final ValueChanged<PlannerTask> onEditTask;
+  final ValueChanged<PlannerTask> onDeleteTask;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 7),
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 14, 12),
+      decoration: const BoxDecoration(
+        color: plannerSurface,
+        border: Border(top: BorderSide(color: plannerDivider)),
+      ),
       child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          SizedBox(
-            width: 96,
-            child: Text(
-              label,
-              style: const TextStyle(color: plannerMuted, fontSize: 12.5),
+          TextButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onDeleteTask(task);
+            },
+            icon: const Icon(Icons.delete_outline_rounded, size: 15),
+            label: const Text('Delete'),
+            style: TextButton.styleFrom(
+              foregroundColor: plannerRed,
+              textStyle: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
-          Expanded(child: child),
+          const Spacer(),
+          FilledButton.icon(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onEditTask(task);
+            },
+            icon: const Icon(Icons.edit_outlined, size: 15),
+            label: const Text('Edit task'),
+            style: FilledButton.styleFrom(
+              textStyle: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1040,6 +1449,3 @@ const _monthNames = [
 ];
 
 const _weekdayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-
-
-

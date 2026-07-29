@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_quill/flutter_quill.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/constants.dart';
@@ -55,7 +54,6 @@ class PlannerApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: appName,
       theme: buildAppTheme(),
-      localizationsDelegates: FlutterQuillLocalizations.localizationsDelegates,
       home: initialized
           ? const _AuthGate()
           : _SetupRequiredPage(error: initError),

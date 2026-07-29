@@ -15,7 +15,13 @@ project before the app will run. The free tier is enough.
 2. Paste the entire contents of [`supabase/schema.sql`](supabase/schema.sql).
 3. Click **Run**.
 
-The script is idempotent, so re-running it later to pick up changes is safe.
+> ⚠️ **This drops every existing Planner table before recreating them.** On a
+> fresh project that does nothing. On a project with real data it destroys all
+> of it — run the files in [`supabase/migrations/`](supabase/migrations/) one at
+> a time instead, so you can stop before `0001_reset.sql`.
+>
+> Accounts survive either way: `auth.users` is never touched, and profiles are
+> rebuilt from it.
 
 It creates:
 
@@ -24,14 +30,36 @@ It creates:
 | `profiles` | Public user data, kept in sync with `auth.users` by a trigger |
 | `workspaces` / `workspace_members` / `workspace_invites` | Teams and access |
 | `boards` / `task_groups` / `tasks` | The planner itself |
+| `board_status_labels` | Each board's own statuses — rename "Working" freely |
+| `task_assignees` | Who a task is assigned to; several people per task |
 | `board_columns` / `task_column_values` | User-defined columns per board |
 | `board_views` | Saved Table/Kanban/Timeline/Calendar views |
 | `task_notes` / `task_note_reactions` | Team-visible notes on a task |
 | `task_comments` / `task_activity` | Discussion and history |
+| `notifications` | Invitations, assignments, due dates, mentions |
 
 Every table has row level security enabled. A user can only read or write rows
 belonging to a workspace they are a member of — the client never filters by user
 id itself, so a bug in the app cannot leak another team's data.
+
+Why the schema is shaped this way is written up in
+[`supabase/DESIGN.md`](supabase/DESIGN.md).
+
+### Due-date reminders
+
+Notifications for invitations, assignments and comments fire from triggers, so
+they need no setup. Due-date reminders are the exception — "a date arrived" is
+not something any row change signals. Enable **Database → Extensions → pg_cron**,
+then run:
+
+```sql
+select cron.schedule(
+  'due-sweep', '0 8 * * *', 'select public.sweep_due_tasks()'
+);
+```
+
+That checks once each morning. Running it more often is harmless: a unique index
+stops the same task notifying the same person twice in a day.
 
 ## 3. Add your credentials
 
@@ -78,6 +106,50 @@ such as `v1.0.0`. The resulting GitHub Release contains:
 > Never put the **`service_role`** key in this project. It bypasses RLS
 > entirely, and anyone with a copy of the app could read and write your whole
 > database. It belongs only on a server.
+
+### "Windows protected your PC"
+
+Installing shows a blue SmartScreen dialog, and the **Run anyway** button is
+hidden behind **More info**. Nothing is wrong with the build: Windows shows this
+for any installer that is not signed by a certificate it recognises. Every
+unsigned app gets it.
+
+**There is no code change that removes this.** Antivirus exclusions, manifest
+edits and installer settings do not help, because the warning is about the
+missing signature, not about behaviour. Two real options:
+
+**1. Buy a code signing certificate** — the only complete fix.
+
+| | Standard OV | Extended Validation (EV) |
+|---|---|---|
+| Cost | ~$200–400/year | ~$400–700/year |
+| Warning gone | After reputation builds | Immediately |
+| Storage | File or token | Hardware token required |
+
+Since June 2023 Microsoft requires all certificates be stored on hardware, so
+even an OV certificate arrives on a USB token. Sellers include DigiCert,
+Sectigo and SSL.com. An OV certificate still shows the warning at first —
+SmartScreen needs to see a few hundred installs before it trusts a new
+publisher. EV skips that wait, which is what you are paying the difference for.
+
+Once you have one, uncomment the two `SignTool` lines at the bottom of
+[`installer/Planner.iss`](installer/Planner.iss) and configure the tool under
+**Tools → Configure Sign Tools** in Inno Setup.
+
+**2. Tell your team to expect it.** For an internal tool with a handful of
+`@vintazk.com` users this is usually the sensible call — a certificate costs
+more per year than the annoyance is worth. Send them:
+
+> Click **More info**, then **Run anyway**. Windows shows this because the app
+> is not code-signed, not because anything is wrong with it.
+
+They can confirm they have the real file by checking **Properties → Details**:
+publisher *Vintazk*, version *1.0.0*.
+
+If Windows *also* quarantines the file or Defender flags it as a threat, that is
+a different problem — a false positive worth reporting at
+[the Microsoft submission site](https://www.microsoft.com/en-us/wdsi/filesubmission),
+which usually clears within a few days.
 
 ## 4. Email confirmation (optional)
 

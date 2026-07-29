@@ -251,10 +251,13 @@ class _StatusBreakdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final counts = <TaskStatus, int>{};
+    final counts = <String, int>{};
     for (final group in board.groups) {
       for (final task in group.tasks) {
-        counts[task.status] = (counts[task.status] ?? 0) + 1;
+        final id = task.statusId;
+        if (id != null) {
+          counts[id] = (counts[id] ?? 0) + 1;
+        }
       }
     }
     if (counts.isEmpty) {
@@ -264,8 +267,8 @@ class _StatusBreakdown extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        for (final status in TaskStatus.values)
-          if ((counts[status] ?? 0) > 0)
+        for (final status in board.statuses)
+          if ((counts[status.id] ?? 0) > 0)
             Padding(
               padding: const EdgeInsets.only(right: 12),
               child: Row(
@@ -281,7 +284,7 @@ class _StatusBreakdown extends StatelessWidget {
                   ),
                   const SizedBox(width: 5),
                   Text(
-                    '${counts[status]} ${status.label.toLowerCase()}',
+                    '${counts[status.id]} ${status.name.toLowerCase()}',
                     style: const TextStyle(
                       color: plannerMuted,
                       fontSize: 12,

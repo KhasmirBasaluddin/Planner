@@ -5,7 +5,7 @@ import '../../../shared/utils/planner_colors.dart';
 
 /// The left rail: workspace switcher at the top, boards in the middle, account
 /// controls at the bottom. Collapses to icons on narrow windows.
-class PlannerSidebar extends StatelessWidget {
+class PlannerSidebar extends StatefulWidget {
   const PlannerSidebar({
     super.key,
     required this.workspaces,
@@ -20,12 +20,14 @@ class PlannerSidebar extends StatelessWidget {
     required this.onJoinWorkspace,
     required this.onRenameWorkspace,
     required this.onManageMembers,
+    required this.onLeaveWorkspace,
     required this.onDeleteWorkspace,
     required this.onSignOut,
     required this.onBoardSelected,
     required this.onCreateBoard,
     required this.onRenameBoard,
     required this.onDeleteBoard,
+    required this.onPinBoard,
   });
 
   final List<Workspace> workspaces;
@@ -43,12 +45,49 @@ class PlannerSidebar extends StatelessWidget {
   final VoidCallback onJoinWorkspace;
   final VoidCallback onRenameWorkspace;
   final VoidCallback onManageMembers;
+  final VoidCallback onLeaveWorkspace;
   final VoidCallback onDeleteWorkspace;
   final VoidCallback onSignOut;
   final ValueChanged<int> onBoardSelected;
   final VoidCallback onCreateBoard;
   final ValueChanged<Board> onRenameBoard;
   final ValueChanged<Board> onDeleteBoard;
+  final ValueChanged<Board> onPinBoard;
+
+  @override
+  State<PlannerSidebar> createState() => _PlannerSidebarState();
+}
+
+class _PlannerSidebarState extends State<PlannerSidebar> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<Workspace> get workspaces => widget.workspaces;
+  int get selectedWorkspaceIndex => widget.selectedWorkspaceIndex;
+  List<Board> get boards => widget.boards;
+  int get selectedBoardIndex => widget.selectedBoardIndex;
+  List<WorkspaceMember> get members => widget.members;
+  bool get loading => widget.loading;
+  bool get compact => widget.compact;
+  ValueChanged<int> get onWorkspaceSelected => widget.onWorkspaceSelected;
+  VoidCallback get onCreateWorkspace => widget.onCreateWorkspace;
+  VoidCallback get onJoinWorkspace => widget.onJoinWorkspace;
+  VoidCallback get onRenameWorkspace => widget.onRenameWorkspace;
+  VoidCallback get onManageMembers => widget.onManageMembers;
+  VoidCallback get onLeaveWorkspace => widget.onLeaveWorkspace;
+  VoidCallback get onDeleteWorkspace => widget.onDeleteWorkspace;
+  VoidCallback get onSignOut => widget.onSignOut;
+  ValueChanged<int> get onBoardSelected => widget.onBoardSelected;
+  VoidCallback get onCreateBoard => widget.onCreateBoard;
+  ValueChanged<Board> get onRenameBoard => widget.onRenameBoard;
+  ValueChanged<Board> get onDeleteBoard => widget.onDeleteBoard;
+  ValueChanged<Board> get onPinBoard => widget.onPinBoard;
 
   Workspace? get _workspace {
     if (workspaces.isEmpty) {
@@ -56,6 +95,38 @@ class PlannerSidebar extends StatelessWidget {
     }
     return workspaces[selectedWorkspaceIndex.clamp(0, workspaces.length - 1)];
   }
+
+  /// Boards matching the search, pinned ones first.
+  ///
+  /// Indexes are carried alongside, because selection is by position in the
+  /// unfiltered list — reordering or filtering the display must not change
+  /// which board a tap selects.
+  List<({Board board, int index})> get _visibleBoards {
+    final query = _query.trim().toLowerCase();
+    final entries = <({Board board, int index})>[];
+    for (var i = 0; i < boards.length; i++) {
+      if (query.isEmpty || boards[i].name.toLowerCase().contains(query)) {
+        entries.add((board: boards[i], index: i));
+      }
+    }
+    // Stable: equally-pinned boards keep the order the server sent.
+    entries.sort((a, b) {
+      if (a.board.pinned == b.board.pinned) {
+        return 0;
+      }
+      return a.board.pinned ? -1 : 1;
+    });
+    return entries;
+  }
+
+  /// Shown whenever there is more than one board to choose between.
+  ///
+  /// An earlier version hid it below six boards, on the theory that a short
+  /// list is faster to scan than to type into. That reasoning was wrong in
+  /// practice: a control that appears only past some invisible threshold reads
+  /// as missing, and someone looking for it has no way to know why it is not
+  /// there. The collapsed rail is the one real exception — there is no room.
+  bool get _showSearch => !compact && boards.length > 1;
 
   @override
   Widget build(BuildContext context) {
@@ -67,113 +138,128 @@ class PlannerSidebar extends StatelessWidget {
     return ConstrainedBox(
       constraints: BoxConstraints(minWidth: railWidth, maxWidth: railWidth),
       child: AnimatedContainer(
-      duration: const Duration(milliseconds: 170),
-      curve: Curves.easeOutCubic,
-      width: railWidth,
-      color: plannerSidebar,
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: compact
-                  ? const EdgeInsets.fromLTRB(14, 18, 14, 14)
-                  : const EdgeInsets.fromLTRB(16, 18, 16, 14),
-              child: _WorkspaceSwitcher(
-                workspace: _workspace,
-                workspaces: workspaces,
-                selectedIndex: selectedWorkspaceIndex,
-                compact: compact,
-                memberCount: members.length,
-                onSelected: onWorkspaceSelected,
-                onCreate: onCreateWorkspace,
-                onJoin: onJoinWorkspace,
-                onRename: onRenameWorkspace,
-                onManageMembers: onManageMembers,
-                onDelete: onDeleteWorkspace,
-              ),
-            ),
-            Divider(
-              color: Colors.white.withValues(alpha: 0.07),
-              height: 1,
-            ),
-            // Until a workspace exists there is nowhere to put a board, so the
-            // whole section is hidden rather than offering an action that
-            // cannot succeed. The welcome screen in the content area is the
-            // only thing to do at this point.
-            if (workspaces.isEmpty)
-              const Spacer()
-            else ...[
-            if (!compact)
+        duration: const Duration(milliseconds: 170),
+        curve: Curves.easeOutCubic,
+        width: railWidth,
+        color: plannerSidebar,
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(24, 18, 16, 8),
-                child: Row(
-                  children: [
-                    const Text(
-                      'BOARDS',
-                      style: TextStyle(
-                        color: Color(0xFF848AAE),
-                        fontSize: 10.5,
-                        fontWeight: FontWeight.w700,
-                        letterSpacing: 0.7,
-                      ),
-                    ),
-                    const Spacer(),
-                    _MiniIconButton(
-                      icon: Icons.add_rounded,
-                      tooltip: 'New board',
-                      onPressed: onCreateBoard,
-                    ),
-                  ],
+                padding: compact
+                    ? const EdgeInsets.fromLTRB(14, 18, 14, 14)
+                    : const EdgeInsets.fromLTRB(16, 18, 16, 14),
+                child: _WorkspaceSwitcher(
+                  workspace: _workspace,
+                  workspaces: workspaces,
+                  selectedIndex: selectedWorkspaceIndex,
+                  compact: compact,
+                  memberCount: members.length,
+                  onSelected: onWorkspaceSelected,
+                  onCreate: onCreateWorkspace,
+                  onJoin: onJoinWorkspace,
+                  onRename: onRenameWorkspace,
+                  onManageMembers: onManageMembers,
+                  onLeave: onLeaveWorkspace,
+                  onDelete: onDeleteWorkspace,
                 ),
-              )
-            else
-              const SizedBox(height: 14),
-            Expanded(
-              child: loading
-                  ? const SizedBox.shrink()
-                  : boards.isEmpty
-                  ? _EmptyBoards(compact: compact, onCreate: onCreateBoard)
-                  : ListView.builder(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: compact ? 14 : 12,
-                      ),
-                      itemCount: boards.length,
-                      itemBuilder: (context, index) {
-                        final board = boards[index];
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 2),
-                          child: _BoardNavItem(
-                            board: board,
-                            selected: selectedBoardIndex == index,
-                            compact: compact,
-                            onTap: () => onBoardSelected(index),
-                            onRename: () => onRenameBoard(board),
-                            onDelete: () => onDeleteBoard(board),
+              ),
+              Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
+              // Until a workspace exists there is nowhere to put a board, so the
+              // whole section is hidden rather than offering an action that
+              // cannot succeed. The welcome screen in the content area is the
+              // only thing to do at this point.
+              if (workspaces.isEmpty)
+                const Spacer()
+              else ...[
+                if (!compact)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 18, 16, 8),
+                    child: Row(
+                      children: [
+                        const Text(
+                          'BOARDS',
+                          style: TextStyle(
+                            color: Color(0xFF848AAE),
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.7,
                           ),
-                        );
-                      },
+                        ),
+                        const Spacer(),
+                        _MiniIconButton(
+                          icon: Icons.add_rounded,
+                          tooltip: 'New board',
+                          onPressed: onCreateBoard,
+                        ),
+                      ],
                     ),
-            ),
-            if (compact)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Center(
-                  child: _MiniIconButton(
-                    icon: Icons.add_rounded,
-                    tooltip: 'New board',
-                    onPressed: onCreateBoard,
+                  )
+                else
+                  const SizedBox(height: 14),
+                if (_showSearch)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+                    child: _BoardSearchField(
+                      controller: _searchController,
+                      onChanged: (value) => setState(() => _query = value),
+                    ),
                   ),
+                Expanded(
+                  child: loading
+                      ? const SizedBox.shrink()
+                      : boards.isEmpty
+                      ? _EmptyBoards(compact: compact, onCreate: onCreateBoard)
+                      : Builder(
+                          builder: (context) {
+                            final visible = _visibleBoards;
+                            if (visible.isEmpty) {
+                              return const _NoBoardMatches();
+                            }
+                            return ListView.builder(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: compact ? 14 : 12,
+                              ),
+                              itemCount: visible.length,
+                              itemBuilder: (context, position) {
+                                final entry = visible[position];
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 2),
+                                  child: _BoardNavItem(
+                                    board: entry.board,
+                                    selected: selectedBoardIndex == entry.index,
+                                    compact: compact,
+                                    onTap: () => onBoardSelected(entry.index),
+                                    onRename: () => onRenameBoard(entry.board),
+                                    onDelete: () => onDeleteBoard(entry.board),
+                                    onPin: () => onPinBoard(entry.board),
+                                  ),
+                                );
+                              },
+                            );
+                          },
+                        ),
                 ),
-              ),
+                if (compact)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Center(
+                      child: _MiniIconButton(
+                        icon: Icons.add_rounded,
+                        tooltip: 'New board',
+                        onPressed: onCreateBoard,
+                      ),
+                    ),
+                  ),
+              ],
+              // Pinned to the bottom of the rail: signing out is a top-level
+              // action people expect to find here, not inside a menu.
+              Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
+              _SidebarSignOut(compact: compact, onPressed: onSignOut),
             ],
-            // Pinned to the bottom of the rail: signing out is a top-level
-            // action people expect to find here, not inside a menu.
-            Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
-            _SidebarSignOut(compact: compact, onPressed: onSignOut),
-          ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -192,6 +278,7 @@ class _WorkspaceSwitcher extends StatelessWidget {
     required this.onJoin,
     required this.onRename,
     required this.onManageMembers,
+    required this.onLeave,
     required this.onDelete,
   });
 
@@ -205,6 +292,7 @@ class _WorkspaceSwitcher extends StatelessWidget {
   final VoidCallback onJoin;
   final VoidCallback onRename;
   final VoidCallback onManageMembers;
+  final VoidCallback onLeave;
   final VoidCallback onDelete;
 
   @override
@@ -235,6 +323,8 @@ class _WorkspaceSwitcher extends StatelessWidget {
                 onRename();
               case _MenuKind.members:
                 onManageMembers();
+              case _MenuKind.leave:
+                onLeave();
               case _MenuKind.delete:
                 onDelete();
             }
@@ -272,7 +362,10 @@ class _WorkspaceSwitcher extends StatelessWidget {
                     child: Text(
                       workspaces[i].name.trim().isEmpty
                           ? 'W'
-                          : workspaces[i].name.trim().characters.first
+                          : workspaces[i].name
+                                .trim()
+                                .characters
+                                .first
                                 .toUpperCase(),
                       style: const TextStyle(
                         color: Colors.white,
@@ -305,7 +398,12 @@ class _WorkspaceSwitcher extends StatelessWidget {
             ),
           const PopupMenuDivider(),
         ],
-        if (workspace != null)
+        // Managing the workspace — its people, name and colour — is for owners
+        // and admins. A member can edit every task in it and still have no
+        // business renaming or deleting it, so those entries are absent rather
+        // than shown-and-refused. The database enforces the same split, so a
+        // member who reached them anyway would only get an error.
+        if (workspace != null && workspace!.role.canManageMembers) ...[
           PopupMenuItem(
             value: const _WorkspaceMenuAction(_MenuKind.members),
             height: 40,
@@ -315,13 +413,38 @@ class _WorkspaceSwitcher extends StatelessWidget {
               trailing: '$memberCount',
             ),
           ),
-        if (workspace != null)
           PopupMenuItem(
             value: const _WorkspaceMenuAction(_MenuKind.rename),
             height: 40,
             child: const _MenuRow(
               icon: Icons.edit_outlined,
               label: 'Workspace settings',
+            ),
+          ),
+        ],
+        // Everyone else gets the team roster, read-only. Seeing who you work
+        // with is not a management action.
+        if (workspace != null && !workspace!.role.canManageMembers)
+          PopupMenuItem(
+            value: const _WorkspaceMenuAction(_MenuKind.members),
+            height: 40,
+            child: _MenuRow(
+              icon: Icons.group_outlined,
+              label: 'View members',
+              trailing: '$memberCount',
+            ),
+          ),
+        // Leaving and deleting are mutually exclusive: the owner cannot walk
+        // away and leave nobody able to manage the workspace, and nobody else
+        // can delete it.
+        if (workspace != null && workspace!.role != WorkspaceRole.owner)
+          PopupMenuItem(
+            value: const _WorkspaceMenuAction(_MenuKind.leave),
+            height: 40,
+            child: const _MenuRow(
+              icon: Icons.logout_rounded,
+              label: 'Leave workspace',
+              danger: true,
             ),
           ),
         if (workspace?.role == WorkspaceRole.owner)
@@ -433,7 +556,7 @@ class _WorkspaceSwitchAction extends _WorkspaceAction {
   final int index;
 }
 
-enum _MenuKind { create, join, rename, members, delete }
+enum _MenuKind { create, join, rename, members, leave, delete }
 
 class _WorkspaceMenuAction extends _WorkspaceAction {
   const _WorkspaceMenuAction(this.kind);
@@ -488,6 +611,7 @@ class _BoardNavItem extends StatefulWidget {
     required this.onTap,
     required this.onRename,
     required this.onDelete,
+    required this.onPin,
   });
 
   final Board board;
@@ -496,6 +620,7 @@ class _BoardNavItem extends StatefulWidget {
   final VoidCallback onTap;
   final VoidCallback onRename;
   final VoidCallback onDelete;
+  final VoidCallback onPin;
 
   @override
   State<_BoardNavItem> createState() => _BoardNavItemState();
@@ -541,9 +666,7 @@ class _BoardNavItemState extends State<_BoardNavItem> {
                     width: 9,
                     height: 9,
                     decoration: BoxDecoration(
-                      color: widget.selected
-                          ? board.color
-                          : Colors.transparent,
+                      color: widget.selected ? board.color : Colors.transparent,
                       shape: BoxShape.circle,
                       border: Border.all(color: board.color, width: 1.8),
                     ),
@@ -551,18 +674,33 @@ class _BoardNavItemState extends State<_BoardNavItem> {
                   if (!widget.compact) ...[
                     const SizedBox(width: 10),
                     Expanded(
-                      child: Text(
-                        board.name,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: widget.selected
-                              ? Colors.white
-                              : const Color(0xFFC8CBDD),
-                          fontSize: 13,
-                          fontWeight: widget.selected
-                              ? FontWeight.w600
-                              : FontWeight.w400,
-                        ),
+                      child: Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              board.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: widget.selected
+                                    ? Colors.white
+                                    : const Color(0xFFC8CBDD),
+                                fontSize: 13,
+                                fontWeight: widget.selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ),
+                          // Marks why this board is sitting above the others.
+                          if (board.pinned) ...[
+                            const SizedBox(width: 5),
+                            const Icon(
+                              Icons.push_pin_rounded,
+                              size: 11,
+                              color: Color(0xFF7A80A3),
+                            ),
+                          ],
+                        ],
                       ),
                     ),
                     // Always built, only faded. Rendering this behind an
@@ -596,6 +734,8 @@ class _BoardNavItemState extends State<_BoardNavItem> {
                               // menu cannot swallow taps meant for the row.
                               ignoring: !_hovered,
                               child: _BoardRowMenu(
+                                pinned: board.pinned,
+                                onPin: widget.onPin,
                                 onRename: widget.onRename,
                                 onDelete: widget.onDelete,
                               ),
@@ -610,6 +750,128 @@ class _BoardNavItemState extends State<_BoardNavItem> {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Filters the board list by name.
+///
+/// Dark-on-dark rather than the light form fields elsewhere: this sits inside
+/// the sidebar, and a white box here would read as a hole punched in it.
+class _BoardSearchField extends StatelessWidget {
+  const _BoardSearchField({required this.controller, required this.onChanged});
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 32,
+      child: TextField(
+        controller: controller,
+        onChanged: onChanged,
+        style: const TextStyle(color: Colors.white, fontSize: 12.5),
+        cursorColor: Colors.white70,
+        cursorHeight: 14,
+        decoration: InputDecoration(
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(vertical: 8),
+          hintText: 'Search boards',
+          hintStyle: const TextStyle(color: Color(0xFF7A80A3), fontSize: 12.5),
+          prefixIcon: const Icon(
+            Icons.search_rounded,
+            size: 15,
+            color: Color(0xFF7A80A3),
+          ),
+          prefixIconConstraints: const BoxConstraints(
+            minWidth: 32,
+            minHeight: 32,
+          ),
+          suffixIcon: controller.text.isEmpty
+              ? null
+              : IconButton(
+                  icon: const Icon(
+                    Icons.close_rounded,
+                    size: 14,
+                    color: Color(0xFF7A80A3),
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 30,
+                    minHeight: 30,
+                  ),
+                  tooltip: 'Clear',
+                  onPressed: () {
+                    controller.clear();
+                    onChanged('');
+                  },
+                ),
+          filled: true,
+          // A plain colour here is only the *resting* fill — Material paints
+          // its hover and focus overlays on top, and on this dark rail those
+          // overlays are pale enough to swallow the white text. Resolving the
+          // same colour for every state keeps the field dark throughout.
+          fillColor: const WidgetStatePropertyAll(
+            plannerSidebarHi,
+          ).resolve(const {}),
+          hoverColor: Colors.transparent,
+          focusColor: Colors.transparent,
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(radiusSm),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(radiusSm),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(radiusSm),
+            borderSide: const BorderSide(color: Color(0xFF4A5080)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Shown when a search matches nothing — distinct from having no boards at
+/// all, which offers a Create button instead.
+class _NoBoardMatches extends StatelessWidget {
+  const _NoBoardMatches();
+
+  @override
+  Widget build(BuildContext context) {
+    // The parent is an Expanded, so this Column is as wide as the rail. Its
+    // children were left-aligned by default, which read as a layout mistake
+    // rather than an empty state — hence stretch plus centred text, and
+    // mainAxisSize.min so the group sits at the top rather than spreading
+    // down the whole remaining height.
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Icon(Icons.search_off_rounded, size: 20, color: Color(0xFF5B6089)),
+          SizedBox(height: 10),
+          Text(
+            'No boards match',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF9096B8),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          SizedBox(height: 3),
+          Text(
+            'Try a different search.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Color(0xFF6B7099), fontSize: 11.5),
+          ),
+        ],
       ),
     );
   }
@@ -687,8 +949,15 @@ class _MiniIconButton extends StatelessWidget {
 }
 
 class _BoardRowMenu extends StatelessWidget {
-  const _BoardRowMenu({required this.onRename, required this.onDelete});
+  const _BoardRowMenu({
+    required this.pinned,
+    required this.onPin,
+    required this.onRename,
+    required this.onDelete,
+  });
 
+  final bool pinned;
+  final VoidCallback onPin;
   final VoidCallback onRename;
   final VoidCallback onDelete;
 
@@ -702,19 +971,29 @@ class _BoardRowMenu extends StatelessWidget {
       constraints: const BoxConstraints(minWidth: 200, maxWidth: 260),
       onSelected: (action) {
         switch (action) {
+          case _SidebarBoardAction.pin:
+            onPin();
           case _SidebarBoardAction.rename:
             onRename();
           case _SidebarBoardAction.delete:
             onDelete();
         }
       },
-      itemBuilder: (context) => const [
+      itemBuilder: (context) => [
         PopupMenuItem(
+          value: _SidebarBoardAction.pin,
+          height: 38,
+          child: _MenuRow(
+            icon: pinned ? Icons.push_pin_rounded : Icons.push_pin_outlined,
+            label: pinned ? 'Unpin board' : 'Pin to top',
+          ),
+        ),
+        const PopupMenuItem(
           value: _SidebarBoardAction.rename,
           height: 38,
           child: _MenuRow(icon: Icons.edit_outlined, label: 'Edit board'),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           value: _SidebarBoardAction.delete,
           height: 38,
           child: _MenuRow(
@@ -737,7 +1016,7 @@ class _BoardRowMenu extends StatelessWidget {
   }
 }
 
-enum _SidebarBoardAction { rename, delete }
+enum _SidebarBoardAction { pin, rename, delete }
 
 /// Sign out, at the foot of the sidebar. Red on hover so the consequence is
 /// clear without shouting at rest.

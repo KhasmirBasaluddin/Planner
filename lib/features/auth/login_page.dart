@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/supabase/auth_service.dart';
-import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
 
 enum _AuthMode { signIn, signUp, reset }
@@ -123,7 +122,8 @@ class _LoginPageState extends State<LoginPage> {
             staySignedIn: _staySignedIn,
           );
           // The auth state stream drives navigation; nothing to do here.
-          await widget.auth.acceptPendingInvites();
+          // Invitations are not claimed on sign-in — they wait in the
+          // notification centre for an explicit accept or decline.
 
         case _AuthMode.signUp:
           final response = await widget.auth.signUp(
@@ -139,8 +139,6 @@ class _LoginPageState extends State<LoginPage> {
                   'Account created. Check ${_emailController.text.trim()} '
                   'for a confirmation link, then sign in.';
             });
-          } else {
-            await widget.auth.acceptPendingInvites();
           }
 
         case _AuthMode.reset:
@@ -657,11 +655,26 @@ class _BoardRow {
   });
 
   final String title;
-  final TaskStatus status;
+  final _DemoStatus status;
   final double progress;
 
   /// Highlights the row that moved in this frame.
   final bool justChanged;
+}
+
+/// The three states this animation cycles through.
+///
+/// Local to the sign-in screen on purpose. Real statuses are defined per board
+/// and live in the database; this is a scripted illustration shown to someone
+/// who has not signed in yet, so it has no board to read them from.
+enum _DemoStatus {
+  notStarted('not started', plannerSlate),
+  working('working', plannerYellow),
+  done('done', plannerGreen);
+
+  const _DemoStatus(this.label, this.color);
+  final String label;
+  final Color color;
 }
 
 /// A short scripted sequence: work progresses, and each step is attributed to a
@@ -672,9 +685,9 @@ const List<_BoardFrame> _script = [
     action: 'moved Design review to Done',
     actorColor: plannerGreen,
     rows: [
-      _BoardRow('Design review', TaskStatus.done, 1.0, justChanged: true),
-      _BoardRow('API integration', TaskStatus.working, 0.55),
-      _BoardRow('User testing', TaskStatus.notStarted, 0.0),
+      _BoardRow('Design review', _DemoStatus.done, 1.0, justChanged: true),
+      _BoardRow('API integration', _DemoStatus.working, 0.55),
+      _BoardRow('User testing', _DemoStatus.notStarted, 0.0),
     ],
   ),
   _BoardFrame(
@@ -682,9 +695,9 @@ const List<_BoardFrame> _script = [
     action: 'pushed API integration to 80%',
     actorColor: plannerYellow,
     rows: [
-      _BoardRow('Design review', TaskStatus.done, 1.0),
-      _BoardRow('API integration', TaskStatus.working, 0.8, justChanged: true),
-      _BoardRow('User testing', TaskStatus.notStarted, 0.0),
+      _BoardRow('Design review', _DemoStatus.done, 1.0),
+      _BoardRow('API integration', _DemoStatus.working, 0.8, justChanged: true),
+      _BoardRow('User testing', _DemoStatus.notStarted, 0.0),
     ],
   ),
   _BoardFrame(
@@ -692,9 +705,9 @@ const List<_BoardFrame> _script = [
     action: 'started User testing',
     actorColor: plannerCyan,
     rows: [
-      _BoardRow('Design review', TaskStatus.done, 1.0),
-      _BoardRow('API integration', TaskStatus.working, 0.8),
-      _BoardRow('User testing', TaskStatus.working, 0.2, justChanged: true),
+      _BoardRow('Design review', _DemoStatus.done, 1.0),
+      _BoardRow('API integration', _DemoStatus.working, 0.8),
+      _BoardRow('User testing', _DemoStatus.working, 0.2, justChanged: true),
     ],
   ),
   _BoardFrame(
@@ -702,9 +715,9 @@ const List<_BoardFrame> _script = [
     action: 'closed out API integration',
     actorColor: plannerGreen,
     rows: [
-      _BoardRow('Design review', TaskStatus.done, 1.0),
-      _BoardRow('API integration', TaskStatus.done, 1.0, justChanged: true),
-      _BoardRow('User testing', TaskStatus.working, 0.45),
+      _BoardRow('Design review', _DemoStatus.done, 1.0),
+      _BoardRow('API integration', _DemoStatus.done, 1.0, justChanged: true),
+      _BoardRow('User testing', _DemoStatus.working, 0.45),
     ],
   ),
 ];
@@ -759,8 +772,8 @@ class _LiveRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final done = row.status == TaskStatus.done;
-    final color = statusColor(row.status);
+    final done = row.status == _DemoStatus.done;
+    final color = row.status.color;
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 420),
@@ -809,7 +822,7 @@ class _LiveRow extends StatelessWidget {
             duration: const Duration(milliseconds: 260),
             opacity: done ? 0.55 : 1,
             child: Text(
-              done ? 'done' : row.status.label.toLowerCase(),
+              done ? 'done' : row.status.label,
               style: GoogleFonts.caveat(
                 color: color,
                 fontSize: 16,
