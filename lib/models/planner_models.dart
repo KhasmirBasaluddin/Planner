@@ -516,6 +516,7 @@ class TaskComment {
     this.editedAt,
     this.reactions = const {},
     this.myReactions = const {},
+    this.reactionUsers = const {},
     this.mentionedIds = const [],
     this.replies = const [],
   });
@@ -525,6 +526,7 @@ class TaskComment {
     UserProfile? author,
     Map<String, int> reactions = const {},
     Set<String> myReactions = const {},
+    Map<String, List<String>> reactionUsers = const {},
     List<String> mentionedIds = const [],
     List<TaskComment> replies = const [],
   }) {
@@ -540,6 +542,7 @@ class TaskComment {
       author: author,
       reactions: reactions,
       myReactions: myReactions,
+      reactionUsers: reactionUsers,
       mentionedIds: mentionedIds,
       replies: replies,
     );
@@ -565,6 +568,9 @@ class TaskComment {
 
   /// Emoji the signed-in user picked, so their own are highlighted.
   final Set<String> myReactions;
+
+  /// Emoji → who used it, so a chip can name its people on hover.
+  final Map<String, List<String>> reactionUsers;
 
   /// Who was named with @. Stored rather than re-parsed, so an edit that drops
   /// the name does not un-notify someone already pinged.
@@ -595,7 +601,12 @@ class TaskComment {
     return '${(elapsed.inDays / 7).floor()}w';
   }
 
-  TaskComment copyWith({List<TaskComment>? replies}) {
+  TaskComment copyWith({
+    List<TaskComment>? replies,
+    Map<String, int>? reactions,
+    Set<String>? myReactions,
+    Map<String, List<String>>? reactionUsers,
+  }) {
     return TaskComment(
       id: id,
       taskId: taskId,
@@ -604,8 +615,9 @@ class TaskComment {
       parentId: parentId,
       author: author,
       editedAt: editedAt,
-      reactions: reactions,
-      myReactions: myReactions,
+      reactions: reactions ?? this.reactions,
+      myReactions: myReactions ?? this.myReactions,
+      reactionUsers: reactionUsers ?? this.reactionUsers,
       mentionedIds: mentionedIds,
       replies: replies ?? this.replies,
     );

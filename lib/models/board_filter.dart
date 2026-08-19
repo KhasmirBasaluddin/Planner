@@ -196,6 +196,32 @@ class BoardSearch {
     }
     return true;
   }
+
+  /// By value, not identity.
+  ///
+  /// Every mutation here returns a fresh instance, so identity says only
+  /// "something was rebuilt" — which made it useless for deciding whether the
+  /// filtered board actually needs recomputing. The board page caches that
+  /// work against this comparison.
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    return other is BoardSearch &&
+        other.groupBy == groupBy &&
+        other.query == query &&
+        other.filterIds.length == filterIds.length &&
+        other.filterIds.containsAll(filterIds);
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    groupBy,
+    query,
+    // Order-independent, matching the set semantics above.
+    Object.hashAllUnordered(filterIds),
+  );
 }
 
 /// A named [BoardSearch], saved for reuse.

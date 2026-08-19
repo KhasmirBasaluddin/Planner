@@ -5,15 +5,36 @@ import '../../../shared/utils/planner_colors.dart';
 import '../../../shared/widgets/user_avatar.dart';
 import 'planner_dialogs.dart';
 
-/// Below this the table scrolls horizontally rather than compressing further.
-///
-/// Sized from the columns that hold real words. The flex weights total 99, so
-/// Status gets 13/99 of the width — at 760 that is ~100px, and a status like
-/// "Working on it" needs ~120 at 12px semibold before the label starts
-/// truncating. The cells ellipsize now either way, but a floor that truncates
-/// the default statuses on a maximised window is the wrong floor.
-const double _minTableWidth = 900;
+/// Below this even the reduced column set scrolls horizontally rather than
+/// compressing further — with only Task, Status and Due left, 520px still
+/// gives the status pill the ~100px "Working on it" needs.
+const double _minTableWidth = 520;
 const double _rowHeight = 54;
+
+/// Which optional columns fit at the current width.
+///
+/// The table used to hold a 900px minimum and scroll sideways below it, which
+/// made it the one view that did not adapt. Instead the least essential
+/// columns now step aside one at a time: the timeline first (progress still
+/// shows in the task dialog), then the owner avatars, then priority. Task,
+/// Status and Due survive to the end — they are what a table row *is*.
+class TableColumns {
+  const TableColumns({
+    this.owner = true,
+    this.priority = true,
+    this.timeline = true,
+  });
+
+  factory TableColumns.forWidth(double width) => TableColumns(
+    timeline: width >= 840,
+    owner: width >= 720,
+    priority: width >= 620,
+  );
+
+  final bool owner;
+  final bool priority;
+  final bool timeline;
+}
 
 class BoardTable extends StatefulWidget {
   const BoardTable({
@@ -31,10 +52,17 @@ class BoardTable extends StatefulWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     this.onTaskReorder,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
+
+  /// The task the attention banner just revealed, if any. Its row lights up
+  /// and carries [highlightKey] so the page can scroll it into view.
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   /// The board's statuses, in display order — the choices the status menu
   /// offers and the source for resolving a task's label.
@@ -60,6 +88,18 @@ class BoardTable extends StatefulWidget {
 class _BoardTableState extends State<BoardTable> {
   final ScrollController _verticalController = ScrollController();
 
+  /// The first group containing the highlighted task, or -1. Only that group
+  /// is handed the highlight key — see the comment at its use site.
+  int get _highlightGroupIndex {
+    final id = widget.highlightedTaskId;
+    if (id == null) {
+      return -1;
+    }
+    return widget.groups.indexWhere(
+      (group) => group.tasks.any((task) => task.id == id),
+    );
+  }
+
   @override
   void dispose() {
     _verticalController.dispose();
@@ -84,6 +124,7 @@ class _BoardTableState extends State<BoardTable> {
         final tableWidth = availableWidth < _minTableWidth
             ? _minTableWidth
             : availableWidth;
+        final columns = TableColumns.forWidth(tableWidth);
 
         return Scrollbar(
           controller: _verticalController,
@@ -103,23 +144,34 @@ class _BoardTableState extends State<BoardTable> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const TableHeader(),
+                    TableHeader(columns: columns),
                     const SizedBox(height: 10),
-                    for (final group in widget.groups) ...[
+                    for (final entry in widget.groups.indexed) ...[
                       GroupSection(
-                        group: group,
+                        group: entry.$2,
+                        columns: columns,
                         members: widget.members,
                         statuses: widget.statuses,
-                        collapsed: widget.collapsedGroupIds.contains(group.id),
-                        onToggle: () => widget.onToggleGroup(group),
-                        onRename: () => widget.onRenameGroup(group),
-                        onDelete: () => widget.onDeleteGroup(group),
+                        collapsed: widget.collapsedGroupIds.contains(
+                          entry.$2.id,
+                        ),
+                        onToggle: () => widget.onToggleGroup(entry.$2),
+                        onRename: () => widget.onRenameGroup(entry.$2),
+                        onDelete: () => widget.onDeleteGroup(entry.$2),
                         onEditTask: widget.onEditTask,
                         onDeleteTask: widget.onDeleteTask,
                         onStatusChanged: widget.onStatusChanged,
                         onProgressChanged: widget.onProgressChanged,
                         onOpenChat: widget.onOpenChat,
                         onTaskReorder: widget.onTaskReorder,
+                        highlightedTaskId: widget.highlightedTaskId,
+                        // Only the first group holding the task carries the
+                        // key. Grouping by assignee puts a task shared by two
+                        // people into both groups, and two widgets claiming
+                        // one GlobalKey tears the tree apart.
+                        highlightKey: entry.$1 == _highlightGroupIndex
+                            ? widget.highlightKey
+                            : null,
                       ),
                       const SizedBox(height: 22),
                     ],
@@ -135,7 +187,9 @@ class _BoardTableState extends State<BoardTable> {
 }
 
 class TableHeader extends StatelessWidget {
-  const TableHeader({super.key});
+  const TableHeader({super.key, this.columns = const TableColumns()});
+
+  final TableColumns columns;
 
   @override
   Widget build(BuildContext context) {
@@ -146,15 +200,15 @@ class TableHeader extends StatelessWidget {
         borderRadius: BorderRadius.circular(6),
         border: Border.all(color: plannerBorder),
       ),
-      child: const Row(
+      child: Row(
         children: [
-          _HeaderCell(flex: 36, label: 'Task'),
-          _HeaderCell(flex: 8, label: 'Owner'),
-          _HeaderCell(flex: 13, label: 'Status'),
-          _HeaderCell(flex: 12, label: 'Priority'),
-          _HeaderCell(flex: 9, label: 'Due'),
-          _HeaderCell(flex: 16, label: 'Timeline'),
-          _HeaderCell(flex: 5, label: ''),
+          const _HeaderCell(flex: 36, label: 'Task'),
+          if (columns.owner) const _HeaderCell(flex: 8, label: 'Owner'),
+          const _HeaderCell(flex: 13, label: 'Status'),
+          if (columns.priority) const _HeaderCell(flex: 12, label: 'Priority'),
+          const _HeaderCell(flex: 9, label: 'Due'),
+          if (columns.timeline) const _HeaderCell(flex: 16, label: 'Timeline'),
+          const _HeaderCell(flex: 5, label: ''),
         ],
       ),
     );
@@ -196,6 +250,7 @@ class GroupSection extends StatelessWidget {
   const GroupSection({
     super.key,
     required this.group,
+    this.columns = const TableColumns(),
     required this.members,
     required this.statuses,
     required this.collapsed,
@@ -208,12 +263,17 @@ class GroupSection extends StatelessWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     this.onTaskReorder,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final TaskGroup group;
+  final TableColumns columns;
   final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final bool collapsed;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
   final VoidCallback onToggle;
   final VoidCallback onRename;
   final VoidCallback onDelete;
@@ -306,7 +366,12 @@ class GroupSection extends StatelessWidget {
               ),
             ),
             if (!collapsed)
-              ReorderableListView(
+              // .builder, not a children list. The list form constructs every
+              // row up front, so a board with a few hundred tasks built all of
+              // them on every rebuild whether or not they were on screen —
+              // the main reason a large board felt sluggish. itemExtent lets
+              // the viewport skip straight to the rows it needs.
+              ReorderableListView.builder(
                 shrinkWrap: true,
                 physics: const NeverScrollableScrollPhysics(),
                 buildDefaultDragHandles: false,
@@ -316,12 +381,16 @@ class GroupSection extends StatelessWidget {
                     ? (_, _) {}
                     : (oldIndex, newIndex) =>
                           onTaskReorder!(group, oldIndex, newIndex),
-                children: [
-                  for (final entry in group.tasks.indexed)
-                    TaskRow(
-                      key: ValueKey(entry.$2.id),
-                      task: entry.$2,
-                      rowIndex: entry.$1,
+                itemCount: group.tasks.length,
+                itemBuilder: (context, index) {
+                  final task = group.tasks[index];
+                  final highlighted = task.id == highlightedTaskId;
+                  return RepaintBoundary(
+                    key: ValueKey(task.id),
+                    child: TaskRow(
+                      task: task,
+                      columns: columns,
+                      rowIndex: index,
                       groupColor: group.color,
                       members: members,
                       statuses: statuses,
@@ -331,8 +400,11 @@ class GroupSection extends StatelessWidget {
                       onProgressChanged: onProgressChanged,
                       onOpenChat: onOpenChat,
                       dragEnabled: onTaskReorder != null,
+                      highlighted: highlighted,
+                      highlightKey: highlighted ? highlightKey : null,
                     ),
-                ],
+                  );
+                },
               ),
           ],
         ),
@@ -367,6 +439,7 @@ class TaskRow extends StatelessWidget {
   const TaskRow({
     super.key,
     required this.task,
+    this.columns = const TableColumns(),
     required this.rowIndex,
     required this.groupColor,
     required this.members,
@@ -377,11 +450,19 @@ class TaskRow extends StatelessWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     required this.dragEnabled,
+    this.highlighted = false,
+    this.highlightKey,
   });
 
   final PlannerTask task;
+  final TableColumns columns;
   final int rowIndex;
   final Color groupColor;
+
+  /// True while the attention banner is pointing at this row; it tints the
+  /// row and, via [highlightKey], lets the page scroll it into view.
+  final bool highlighted;
+  final GlobalKey? highlightKey;
   final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final ValueChanged<PlannerTask> onEditTask;
@@ -396,11 +477,14 @@ class TaskRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final status = statusById(statuses, task.statusId);
-    final row = Container(
+    final row = AnimatedContainer(
+      duration: const Duration(milliseconds: 350),
       height: _rowHeight,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFEDEFF5))),
+      decoration: BoxDecoration(
+        color: highlighted
+            ? Color.alphaBlend(tint(plannerBlue, 0.12), Colors.white)
+            : Colors.white,
+        border: const Border(top: BorderSide(color: Color(0xFFEDEFF5))),
       ),
       child: Row(
         children: [
@@ -419,13 +503,19 @@ class TaskRow extends StatelessWidget {
                       : const _DragHandle(),
                   const SizedBox(width: 8),
                   Expanded(
-                    child: Text(
-                      task.title,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: plannerInk,
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w500,
+                    // The full title on hover, for rows narrow enough to
+                    // ellipsize it.
+                    child: Tooltip(
+                      message: task.title,
+                      waitDuration: const Duration(milliseconds: 700),
+                      child: Text(
+                        task.title,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerInk,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ),
@@ -436,12 +526,13 @@ class TaskRow extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            flex: 8,
-            child: Center(
-              child: AssigneeAvatars(task: task, members: members),
+          if (columns.owner)
+            Expanded(
+              flex: 8,
+              child: Center(
+                child: AssigneeAvatars(task: task, members: members),
+              ),
             ),
-          ),
           Expanded(
             flex: 13,
             child: Padding(
@@ -454,13 +545,14 @@ class TaskRow extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(
-            flex: 12,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: PriorityPill(priority: task.priority),
+          if (columns.priority)
+            Expanded(
+              flex: 12,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: PriorityPill(priority: task.priority),
+              ),
             ),
-          ),
           Expanded(
             flex: 9,
             child: Padding(
@@ -468,19 +560,20 @@ class TaskRow extends StatelessWidget {
               child: DueDateCell(task: task, status: status),
             ),
           ),
-          Expanded(
-            flex: 16,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: TimelineCell(
-                task: task,
-                status: status,
-                onProgressChanged: (progress) {
-                  onProgressChanged(task, progress);
-                },
+          if (columns.timeline)
+            Expanded(
+              flex: 16,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: TimelineCell(
+                  task: task,
+                  status: status,
+                  onProgressChanged: (progress) {
+                    onProgressChanged(task, progress);
+                  },
+                ),
               ),
             ),
-          ),
           Expanded(
             flex: 5,
             child: Align(
@@ -501,7 +594,8 @@ class TaskRow extends StatelessWidget {
       ),
     );
 
-    return row;
+    final key = highlightKey;
+    return key == null ? row : KeyedSubtree(key: key, child: row);
   }
 }
 
@@ -510,15 +604,19 @@ class _DragHandle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const MouseRegion(
-      cursor: SystemMouseCursors.grab,
-      child: SizedBox(
-        width: 22,
-        height: 34,
-        child: Icon(
-          Icons.drag_indicator_rounded,
-          color: Color(0xFFC3C8D6),
-          size: 16,
+    return const Tooltip(
+      message: 'Drag to reorder',
+      waitDuration: Duration(milliseconds: 500),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.grab,
+        child: SizedBox(
+          width: 22,
+          height: 34,
+          child: Icon(
+            Icons.drag_indicator_rounded,
+            color: Color(0xFFC3C8D6),
+            size: 16,
+          ),
         ),
       ),
     );
@@ -681,33 +779,36 @@ class PriorityPill extends StatelessWidget {
     final color = priorityColor(priority);
     return Align(
       alignment: Alignment.centerLeft,
-      child: Container(
-        height: 26,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(5),
-          border: Border.all(color: plannerBorder),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.flag_rounded, size: 11, color: color),
-            const SizedBox(width: 5),
-            // Same reason as the status pill: "Medium" and "Urgent" outgrow
-            // the priority column before the window gets especially narrow.
-            Flexible(
-              child: Text(
-                priority.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  color: plannerText,
-                  fontWeight: FontWeight.w500,
-                  fontSize: 12,
+      child: Tooltip(
+        message: 'Priority: ${priority.label} — change it by editing the task',
+        child: Container(
+          height: 26,
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: plannerBorder),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.flag_rounded, size: 11, color: color),
+              const SizedBox(width: 5),
+              // Same reason as the status pill: "Medium" and "Urgent" outgrow
+              // the priority column before the window gets especially narrow.
+              Flexible(
+                child: Text(
+                  priority.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: plannerText,
+                    fontWeight: FontWeight.w500,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1077,10 +1178,13 @@ class DueDateCell extends StatelessWidget {
   Widget build(BuildContext context) {
     final due = task.dueDate;
     if (due == null) {
-      return const Text(
-        'No date',
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(color: plannerFaint, fontSize: 13),
+      return const Tooltip(
+        message: 'No due date set — add one by editing the task',
+        child: Text(
+          'No date',
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(color: plannerFaint, fontSize: 13),
+        ),
       );
     }
 
@@ -1089,7 +1193,7 @@ class DueDateCell extends StatelessWidget {
     final today = task.isDueToday && !done;
     final color = overdue ? plannerRed : (today ? plannerOrange : plannerText);
 
-    return Row(
+    final row = Row(
       children: [
         if (overdue || today) ...[
           Icon(
@@ -1111,6 +1215,15 @@ class DueDateCell extends StatelessWidget {
           ),
         ),
       ],
+    );
+
+    return Tooltip(
+      message: overdue
+          ? 'Overdue — was due ${formatDate(due)}'
+          : today
+          ? 'Due today'
+          : 'Due ${formatDate(due)}',
+      child: row,
     );
   }
 }

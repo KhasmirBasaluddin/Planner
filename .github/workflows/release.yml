@@ -24,6 +24,22 @@ jobs:
         shell: pwsh
         run: Copy-Item .env.example .env
 
+      # The version comes from the tag (v1.2.0 -> 1.2.0) and is stamped into
+      # the executable, the installer, and the artifact names. The in-app
+      # updater compares the executable's version against the latest release
+      # tag, so all of these have to agree.
+      - name: Determine version
+        id: version
+        shell: pwsh
+        run: |
+          if ('${{ github.ref_type }}' -eq 'tag') {
+            $version = '${{ github.ref_name }}'.TrimStart('v')
+          } else {
+            $match = Select-String -Path pubspec.yaml -Pattern '^version:\s*(\S+)'
+            $version = $match.Matches[0].Groups[1].Value.Split('+')[0]
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
       - name: Validate
         run: |
           flutter pub get
@@ -33,6 +49,8 @@ jobs:
       - name: Build Windows app
         run: >-
           flutter build windows --release
+          --build-name=${{ steps.version.outputs.version }}
+          --build-number=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
@@ -40,11 +58,11 @@ jobs:
         run: choco install innosetup --yes --no-progress
 
       - name: Build installer
-        run: iscc installer\Planner.iss
+        run: iscc /DMyAppVersion=${{ steps.version.outputs.version }} installer\Planner.iss
 
       - name: Package portable app
         shell: pwsh
-        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Planner-Portable-1.0.0.zip
+        run: Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath dist\Planner-Portable-${{ steps.version.outputs.version }}.zip
 
       - name: Publish GitHub release
         if: startsWith(github.ref, 'refs/tags/')
@@ -52,5 +70,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            dist/PlannerSetup-1.0.0.exe
-            dist/Planner-Portable-1.0.0.zip
+            dist/PlannerSetup-*.exe
+            dist/Planner-Portable-*.zip

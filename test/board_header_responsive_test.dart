@@ -75,6 +75,7 @@ void main() {
                 onSaveView: (_, _) {},
                 onDeleteView: (_) {},
                 onApplyView: (_) {},
+                onSetDefaultView: (_, _) {},
                 taskOrder: TaskOrder.manual,
                 onTaskOrderChanged: (_) {},
               ),

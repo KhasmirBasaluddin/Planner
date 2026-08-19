@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/widgets/app_dialog.dart';
 import '../../../shared/widgets/user_avatar.dart';
 import 'board_table.dart';
 import 'planner_dialogs.dart';
@@ -17,10 +18,17 @@ class BoardCalendar extends StatefulWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
+
+  /// The task the attention banner just revealed, if any. The calendar jumps
+  /// to its due month and lights its chip up.
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   /// The board's statuses, used to resolve the label behind each task.
   final List<StatusLabel> statuses;
@@ -44,6 +52,37 @@ class _BoardCalendarState extends State<BoardCalendar> {
     super.initState();
     final now = DateTime.now();
     _visibleMonth = DateTime(now.year, now.month);
+    final due = _highlightedDueDate();
+    if (due != null) {
+      _visibleMonth = DateTime(due.year, due.month);
+    }
+  }
+
+  @override
+  void didUpdateWidget(covariant BoardCalendar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A reveal can point at a task in another month; follow it there.
+    if (widget.highlightedTaskId != oldWidget.highlightedTaskId) {
+      final due = _highlightedDueDate();
+      if (due != null) {
+        setState(() => _visibleMonth = DateTime(due.year, due.month));
+      }
+    }
+  }
+
+  DateTime? _highlightedDueDate() {
+    final id = widget.highlightedTaskId;
+    if (id == null) {
+      return null;
+    }
+    for (final group in widget.groups) {
+      for (final task in group.tasks) {
+        if (task.id == id) {
+          return task.dueDate;
+        }
+      }
+    }
+    return null;
   }
 
   @override
@@ -80,15 +119,20 @@ class _BoardCalendarState extends State<BoardCalendar> {
                   onNext: () => _changeMonth(1),
                   onToday: _goToToday,
                   onOpenTask: _openTask,
+                  highlightedTaskId: widget.highlightedTaskId,
+                  highlightKey: widget.highlightKey,
                 )
               : _MonthCalendar(
                   month: _visibleMonth,
                   tasks: monthTasks,
+                  members: widget.members,
                   statuses: widget.statuses,
                   onPrevious: () => _changeMonth(-1),
                   onNext: () => _changeMonth(1),
                   onToday: _goToToday,
                   onOpenTask: _openTask,
+                  highlightedTaskId: widget.highlightedTaskId,
+                  highlightKey: widget.highlightKey,
                 ),
         );
       },
@@ -125,20 +169,26 @@ class _MonthCalendar extends StatelessWidget {
   const _MonthCalendar({
     required this.month,
     required this.tasks,
+    required this.members,
     required this.statuses,
     required this.onPrevious,
     required this.onNext,
     required this.onToday,
     required this.onOpenTask,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final DateTime month;
   final List<_CalendarTask> tasks;
+  final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final VoidCallback onPrevious;
   final VoidCallback onNext;
   final VoidCallback onToday;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -177,8 +227,11 @@ class _MonthCalendar extends StatelessWidget {
                         date: days[row * 7 + column],
                         currentMonth: month.month,
                         tasks: _tasksForDay(tasks, days[row * 7 + column]),
+                        members: members,
                         statuses: statuses,
                         onOpenTask: onOpenTask,
+                        highlightedTaskId: highlightedTaskId,
+                        highlightKey: highlightKey,
                       ),
                     ),
                 ],
@@ -200,6 +253,8 @@ class _AgendaCalendar extends StatelessWidget {
     required this.onNext,
     required this.onToday,
     required this.onOpenTask,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final DateTime month;
@@ -210,6 +265,8 @@ class _AgendaCalendar extends StatelessWidget {
   final VoidCallback onNext;
   final VoidCallback onToday;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -245,6 +302,8 @@ class _AgendaCalendar extends StatelessWidget {
               members: members,
               statuses: statuses,
               onOpenTask: onOpenTask,
+              highlightedTaskId: highlightedTaskId,
+              highlightKey: highlightKey,
             ),
             const SizedBox(height: 10),
           ],
@@ -364,21 +423,42 @@ class _DayCell extends StatelessWidget {
     required this.date,
     required this.currentMonth,
     required this.tasks,
+    required this.members,
     required this.statuses,
     required this.onOpenTask,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final DateTime date;
   final int currentMonth;
   final List<_CalendarTask> tasks;
+  final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
+
+  /// The chips shown in the cell itself. Three fit; a busier day shows two
+  /// plus a "+N more" opener, and a revealed task is always among them.
+  List<_CalendarTask> get _visibleTasks {
+    final shown = tasks.length <= 3 ? tasks.length : 2;
+    var visible = tasks.take(shown).toList();
+    final id = highlightedTaskId;
+    if (id != null &&
+        tasks.any((t) => t.task.id == id) &&
+        !visible.any((t) => t.task.id == id)) {
+      final entry = tasks.firstWhere((t) => t.task.id == id);
+      visible = [entry, ...tasks.where((t) => t.task.id != id).take(shown - 1)];
+    }
+    return visible;
+  }
 
   @override
   Widget build(BuildContext context) {
     final isOutside = date.month != currentMonth;
     final isToday = _sameDate(date, DateTime.now());
-    final visibleTasks = tasks.take(3).toList();
+    final visibleTasks = _visibleTasks;
     final hiddenCount = tasks.length - visibleTasks.length;
 
     return Container(
@@ -417,25 +497,126 @@ class _DayCell extends StatelessWidget {
                 ),
               ),
               const Spacer(),
+              if (tasks.isNotEmpty)
+                Text(
+                  '${tasks.length}',
+                  style: const TextStyle(
+                    color: plannerFaint,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 7),
+          const SizedBox(height: 6),
           for (final entry in visibleTasks) ...[
             _CalendarTaskChip(
               entry: entry,
               status: statusById(statuses, entry.task.statusId),
               onOpenTask: onOpenTask,
+              highlighted: entry.task.id == highlightedTaskId,
+              highlightKey: entry.task.id == highlightedTaskId
+                  ? highlightKey
+                  : null,
             ),
-            const SizedBox(height: 5),
+            const SizedBox(height: 4),
           ],
           if (hiddenCount > 0)
-            Padding(
-              padding: const EdgeInsets.only(left: 4),
-              child: Text(
-                '$hiddenCount more',
-                style: const TextStyle(color: plannerMuted, fontSize: 11),
-              ),
+            _MoreChip(
+              count: hiddenCount,
+              date: date,
+              tasks: tasks,
+              members: members,
+              statuses: statuses,
+              onOpenTask: onOpenTask,
             ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The "+N more" opener for a day too busy for its cell. The full list opens
+/// in a dialog, so a crowded day never overflows the grid.
+class _MoreChip extends StatelessWidget {
+  const _MoreChip({
+    required this.count,
+    required this.date,
+    required this.tasks,
+    required this.members,
+    required this.statuses,
+    required this.onOpenTask,
+  });
+
+  final int count;
+  final DateTime date;
+  final List<_CalendarTask> tasks;
+  final List<WorkspaceMember> members;
+  final List<StatusLabel> statuses;
+  final ValueChanged<_CalendarTask> onOpenTask;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Show all ${tasks.length} tasks due this day',
+      child: InkWell(
+        onTap: () => _showDayTasks(context),
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          height: 22,
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: plannerSurface,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: plannerBorder),
+          ),
+          alignment: Alignment.centerLeft,
+          child: Text(
+            '+$count more',
+            style: const TextStyle(
+              color: plannerMuted,
+              fontSize: 10.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showDayTasks(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AppDialog(
+        icon: Icons.event_outlined,
+        title:
+            '${_weekdayNames[date.weekday % 7]}, '
+            '${_monthNames[date.month - 1]} ${date.day}',
+        message: '${tasks.length} tasks due this day. Click one to open it.',
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final entry in tasks) ...[
+              _AgendaTaskCard(
+                entry: entry,
+                members: members,
+                status: statusById(statuses, entry.task.statusId),
+                onOpenTask: (task) {
+                  Navigator.of(dialogContext).pop();
+                  onOpenTask(task);
+                },
+              ),
+              if (entry != tasks.last) const SizedBox(height: 8),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
         ],
       ),
     );
@@ -449,6 +630,8 @@ class _AgendaDay extends StatelessWidget {
     required this.members,
     required this.statuses,
     required this.onOpenTask,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final DateTime date;
@@ -456,6 +639,8 @@ class _AgendaDay extends StatelessWidget {
   final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -484,6 +669,10 @@ class _AgendaDay extends StatelessWidget {
               members: members,
               status: statusById(statuses, entry.task.statusId),
               onOpenTask: onOpenTask,
+              highlighted: entry.task.id == highlightedTaskId,
+              highlightKey: entry.task.id == highlightedTaskId
+                  ? highlightKey
+                  : null,
             ),
             if (entry != tasks.last) const SizedBox(height: 8),
           ],
@@ -498,53 +687,101 @@ class _CalendarTaskChip extends StatelessWidget {
     required this.entry,
     required this.status,
     required this.onOpenTask,
+    this.highlighted = false,
+    this.highlightKey,
   });
 
   final _CalendarTask entry;
   final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final bool highlighted;
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
     final color = statusColor(status);
-    return Material(
+    final done = status?.isDone ?? false;
+    final overdue = task.isOverdue(done: done);
+    final pressing =
+        task.priority == TaskPriority.urgent ||
+        task.priority == TaskPriority.high;
+
+    // Washed with the status colour like a kanban card, so a glance at the
+    // month says how the work stands, not just that work exists. Overdue and
+    // urgent get their marks; the details dialog holds the rest.
+    final chip = Material(
       color: Colors.transparent,
-      child: InkWell(
-        onTap: () => onOpenTask(entry),
-        borderRadius: BorderRadius.circular(6),
-        child: Container(
-          height: 24,
-          padding: const EdgeInsets.symmetric(horizontal: 6),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: plannerBorder),
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      child: Tooltip(
+        message:
+            '${task.title}\n'
+            '${status?.name ?? 'No status'} · ${task.priority.label} priority'
+            '${overdue ? ' · Overdue' : ''}',
+        waitDuration: const Duration(milliseconds: 500),
+        child: InkWell(
+          onTap: () => onOpenTask(entry),
+          borderRadius: BorderRadius.circular(4),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 350),
+            height: 24,
+            padding: const EdgeInsets.symmetric(horizontal: 6),
+            decoration: BoxDecoration(
+              color: Color.alphaBlend(
+                highlighted ? tint(plannerBlue, 0.12) : tint(color, 0.08),
+                Colors.white,
               ),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  task.title,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: plannerInk,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w500,
+              borderRadius: BorderRadius.circular(4),
+              border: Border.all(
+                color: highlighted ? plannerBlue : tint(color, 0.30),
+                width: highlighted ? 1.4 : 1,
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
                   ),
                 ),
-              ),
-            ],
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    task.title,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: overdue ? plannerRed : plannerInk,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (overdue) ...[
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.error_outline_rounded,
+                    size: 11,
+                    color: plannerRed,
+                  ),
+                ] else if (pressing) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    Icons.flag_rounded,
+                    size: 10,
+                    color: priorityColor(task.priority),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),
     );
+
+    final key = highlightKey;
+    return key == null ? chip : KeyedSubtree(key: key, child: chip);
   }
 }
 
@@ -554,28 +791,38 @@ class _AgendaTaskCard extends StatelessWidget {
     required this.members,
     required this.status,
     required this.onOpenTask,
+    this.highlighted = false,
+    this.highlightKey,
   });
 
   final _CalendarTask entry;
   final List<WorkspaceMember> members;
   final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
+  final bool highlighted;
+  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
     final task = entry.task;
     final color = statusColor(status);
-    return Material(
+    final card = Material(
       color: Colors.transparent,
       child: InkWell(
         onTap: () => onOpenTask(entry),
         borderRadius: BorderRadius.circular(radiusMd),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 350),
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: highlighted
+                ? Color.alphaBlend(tint(plannerBlue, 0.10), Colors.white)
+                : Colors.white,
             borderRadius: BorderRadius.circular(radiusSm),
-            border: Border.all(color: plannerBorder),
+            border: Border.all(
+              color: highlighted ? plannerBlue : plannerBorder,
+              width: highlighted ? 1.4 : 1,
+            ),
           ),
           child: Row(
             children: [
@@ -617,6 +864,9 @@ class _AgendaTaskCard extends StatelessWidget {
         ),
       ),
     );
+
+    final key = highlightKey;
+    return key == null ? card : KeyedSubtree(key: key, child: card);
   }
 }
 
@@ -727,6 +977,12 @@ class _TaskDetailsDialog extends StatelessWidget {
                         tone: tone,
                       ),
                     ],
+                    const SizedBox(height: 12),
+                    // The discussion gets a card of its own rather than an
+                    // icon in the corner: on a shared task the conversation
+                    // is half the point, and a hidden entrance reads as
+                    // "there is no chat".
+                    _DiscussionCard(task: task, onOpenChat: onOpenChat),
                   ],
                 ),
               ),
@@ -838,7 +1094,6 @@ class _DetailsHeader extends StatelessWidget {
             ),
           ),
           const SizedBox(width: 8),
-          _HeaderChatButton(task: task, onOpenChat: onOpenChat),
           IconButton(
             icon: const Icon(Icons.close_rounded, size: 18),
             color: plannerMuted,
@@ -852,50 +1107,102 @@ class _DetailsHeader extends StatelessWidget {
   }
 }
 
-/// The chat button, carrying its message count.
-class _HeaderChatButton extends StatelessWidget {
-  const _HeaderChatButton({required this.task, required this.onOpenChat});
+/// The task's discussion, promoted to a full-width card.
+///
+/// Tinted with the brand blue and given a real button, because "is anyone
+/// talking about this?" is the question a shared task answers here — and the
+/// message count answers it before the card is even clicked.
+class _DiscussionCard extends StatelessWidget {
+  const _DiscussionCard({required this.task, required this.onOpenChat});
 
   final PlannerTask task;
   final ValueChanged<PlannerTask> onOpenChat;
 
+  void _open(BuildContext context) {
+    Navigator.of(context).pop();
+    onOpenChat(task);
+  }
+
   @override
   Widget build(BuildContext context) {
     final count = task.commentCount;
+    final hasMessages = count > 0;
 
-    return Tooltip(
-      message: count == 0
-          ? 'Open chat'
-          : '$count ${count == 1 ? 'message' : 'messages'}',
+    return Material(
+      color: Colors.transparent,
       child: InkWell(
-        onTap: () {
-          Navigator.of(context).pop();
-          onOpenChat(task);
-        },
-        borderRadius: BorderRadius.circular(radiusSm),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
+        onTap: () => _open(context),
+        borderRadius: BorderRadius.circular(radiusMd),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+          decoration: BoxDecoration(
+            color: tint(plannerBlue, hasMessages ? 0.06 : 0.03),
+            borderRadius: BorderRadius.circular(radiusMd),
+            border: Border.all(
+              color: tint(plannerBlue, hasMessages ? 0.28 : 0.16),
+            ),
+          ),
           child: Row(
-            mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                count > 0
-                    ? Icons.forum_rounded
-                    : Icons.chat_bubble_outline_rounded,
-                size: 15,
-                color: count > 0 ? plannerBlue : plannerMuted,
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: tint(plannerBlue, 0.12),
+                  borderRadius: BorderRadius.circular(radiusSm),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  hasMessages
+                      ? Icons.forum_rounded
+                      : Icons.chat_bubble_outline_rounded,
+                  size: 16,
+                  color: plannerBlue,
+                ),
               ),
-              if (count > 0) ...[
-                const SizedBox(width: 5),
-                Text(
-                  '$count',
-                  style: const TextStyle(
-                    color: plannerBlue,
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Task chat',
+                      style: TextStyle(
+                        color: plannerInk,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      hasMessages
+                          ? '$count ${count == 1 ? 'message' : 'messages'} — '
+                                'open to read and reply'
+                          : 'No messages yet — start the discussion',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: plannerMuted,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: () => _open(context),
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  textStyle: const TextStyle(
                     fontSize: 12,
-                    fontWeight: FontWeight.w700,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-              ],
+                child: const Text('Open chat'),
+              ),
             ],
           ),
         ),

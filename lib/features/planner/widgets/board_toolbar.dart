@@ -18,6 +18,7 @@ class BoardToolbar extends StatelessWidget {
     required this.onSaveView,
     required this.onDeleteView,
     required this.onApplyView,
+    required this.onSetDefaultView,
     required this.taskOrder,
     required this.onTaskOrderChanged,
   });
@@ -36,6 +37,7 @@ class BoardToolbar extends StatelessWidget {
   final void Function(String name, bool isDefault) onSaveView;
   final ValueChanged<SavedView> onDeleteView;
   final ValueChanged<SavedView> onApplyView;
+  final void Function(SavedView view, bool isDefault) onSetDefaultView;
   final TaskOrder taskOrder;
   final ValueChanged<TaskOrder> onTaskOrderChanged;
 
@@ -43,13 +45,16 @@ class BoardToolbar extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Narrower search on a small window, so the view buttons keep their
-        // labels rather than being scrolled out of reach.
-        final searchWidth = constraints.maxWidth < 900 ? 260.0 : 340.0;
+        final tight = constraints.maxWidth < 640;
+        // The search takes a share of the row rather than one of two fixed
+        // widths, so it shrinks smoothly instead of jumping at 900px and
+        // crowding the view buttons on everything narrower.
+        final searchWidth = (constraints.maxWidth * 0.34).clamp(170.0, 360.0);
+        final hPad = tight ? 16.0 : 28.0;
 
         return Container(
           height: 50,
-          padding: const EdgeInsets.symmetric(horizontal: 28),
+          padding: EdgeInsets.symmetric(horizontal: hPad),
           decoration: const BoxDecoration(
             color: Colors.white,
             border: Border(bottom: BorderSide(color: plannerBorder)),
@@ -71,21 +76,27 @@ class BoardToolbar extends StatelessWidget {
                     physics: const ClampingScrollPhysics(),
                     child: Row(
                       children: [
+                        // Icon-only once the row is tight: the labels are the
+                        // first thing that can go, and the icons plus their
+                        // tooltips still say which view is which.
                         ViewButton(
                           icon: Icons.table_rows_outlined,
                           label: 'Table',
+                          compact: tight,
                           selected: mode == ViewMode.table,
                           onTap: () => onModeChanged(ViewMode.table),
                         ),
                         ViewButton(
                           icon: Icons.view_kanban_outlined,
                           label: 'Kanban',
+                          compact: tight,
                           selected: mode == ViewMode.kanban,
                           onTap: () => onModeChanged(ViewMode.kanban),
                         ),
                         ViewButton(
                           icon: Icons.calendar_today_outlined,
                           label: 'Calendar',
+                          compact: tight,
                           selected: mode == ViewMode.calendar,
                           onTap: () => onModeChanged(ViewMode.calendar),
                         ),
@@ -94,7 +105,7 @@ class BoardToolbar extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(width: 16),
+              SizedBox(width: tight ? 8 : 16),
               SizedBox(
                 width: searchWidth,
                 child: FilterBar(
@@ -106,6 +117,7 @@ class BoardToolbar extends StatelessWidget {
                   onSaveView: onSaveView,
                   onDeleteView: onDeleteView,
                   onApplyView: onApplyView,
+                  onSetDefaultView: onSetDefaultView,
                   taskOrder: taskOrder,
                   onTaskOrderChanged: onTaskOrderChanged,
                 ),
@@ -125,6 +137,7 @@ class ViewButton extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.compact = false,
   });
 
   final IconData icon;
@@ -132,35 +145,48 @@ class ViewButton extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// Drops the label, leaving the icon and its tooltip. What a narrow window
+  /// buys back for the search field beside it.
+  final bool compact;
+
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.only(right: 4),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(6),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          curve: Curves.easeOutCubic,
-          height: 32,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          decoration: BoxDecoration(
-            color: selected ? const Color(0xFFF0F1F5) : Colors.transparent,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            children: [
-              Icon(icon, size: 16, color: selected ? plannerInk : plannerMuted),
-              const SizedBox(width: 6),
-              Text(
-                label,
-                style: TextStyle(
+      child: Tooltip(
+        message: compact ? label : '',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(6),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOutCubic,
+            height: 32,
+            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
+            decoration: BoxDecoration(
+              color: selected ? const Color(0xFFF0F1F5) : Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  icon,
+                  size: 16,
                   color: selected ? plannerInk : plannerMuted,
-                  fontSize: 13,
-                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
                 ),
-              ),
-            ],
+                if (!compact) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: selected ? plannerInk : plannerMuted,
+                      fontSize: 13,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ),
         ),
       ),

@@ -25,6 +25,7 @@ class FilterBar extends StatefulWidget {
     required this.onSaveView,
     required this.onDeleteView,
     required this.onApplyView,
+    required this.onSetDefaultView,
     required this.taskOrder,
     required this.onTaskOrderChanged,
   });
@@ -49,6 +50,10 @@ class FilterBar extends StatefulWidget {
   final ValueChanged<SavedView> onDeleteView;
   final ValueChanged<SavedView> onApplyView;
 
+  /// Flips whether an already-saved filter applies itself when the board
+  /// opens — so a favourite does not have to be re-saved to become one.
+  final void Function(SavedView view, bool isDefault) onSetDefaultView;
+
   @override
   State<FilterBar> createState() => _FilterBarState();
 }
@@ -56,10 +61,20 @@ class FilterBar extends StatefulWidget {
 class _FilterBarState extends State<FilterBar> {
   final MenuController _menu = MenuController();
   final ScrollController _chipScroll = ScrollController();
+  final FocusNode _fieldFocus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    // The whole bar reacts to focus, rather than the text box alone drawing
+    // its own ring inside a container that stays inert.
+    _fieldFocus.addListener(() => setState(() {}));
+  }
 
   @override
   void dispose() {
     _chipScroll.dispose();
+    _fieldFocus.dispose();
     super.dispose();
   }
 
@@ -74,22 +89,34 @@ class _FilterBarState extends State<FilterBar> {
   Widget build(BuildContext context) {
     final search = widget.search;
 
-    return Container(
+    final active = search.chipCount > 0;
+    final focused = _fieldFocus.hasFocus;
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 140),
       height: 34,
       decoration: BoxDecoration(
-        // The bar is the surface. It used to be a white box holding a grey
-        // field holding a grey button — three shades stacked inside 34px,
-        // which is what made the search look muddy against the white toolbar.
-        color: plannerSurface,
+        // One surface, one border. The bar was a grey box holding a *white*
+        // TextField — the app theme fills every input with plannerCard — so
+        // a pale rectangle sat inside a grey frame and the two shades fought.
+        // The field's own fill is switched off below; this is the only ground.
+        color: focused ? plannerCard : plannerSurface,
         borderRadius: BorderRadius.circular(radiusSm),
         border: Border.all(
-          color: search.chipCount > 0 ? plannerBlue : plannerBorder,
+          color: focused
+              ? plannerBlue
+              : (active ? tint(plannerBlue, 0.45) : plannerBorder),
+          width: focused ? 1.4 : 1,
         ),
       ),
       padding: const EdgeInsets.only(left: 10, right: 4),
       child: Row(
         children: [
-          const Icon(Icons.search_rounded, size: 15, color: plannerFaint),
+          Icon(
+            Icons.search_rounded,
+            size: 15,
+            color: focused ? plannerBlue : plannerFaint,
+          ),
           const SizedBox(width: 8),
 
           // Chips sit inside the bar rather than on a row of their own, so a
@@ -138,14 +165,27 @@ class _FilterBarState extends State<FilterBar> {
           Expanded(
             child: TextField(
               controller: widget.controller,
+              focusNode: _fieldFocus,
               // Emoji are stripped here as everywhere outside chat: a search
               // term containing one can never match a task name, which cannot.
               inputFormatters: [emojiFreeFormatter],
               style: const TextStyle(fontSize: 13),
+              cursorColor: plannerBlue,
+              cursorHeight: 15,
               decoration: InputDecoration(
                 isDense: true,
+                // filled:false, and every border cleared. The theme fills
+                // inputs white and Material paints hover and focus overlays
+                // on top — all of it landing as a lighter rectangle inside
+                // this bar. The container above is the whole visual.
+                filled: false,
+                fillColor: Colors.transparent,
+                hoverColor: Colors.transparent,
+                focusColor: Colors.transparent,
                 border: InputBorder.none,
-                hintText: search.chipCount > 0 ? '' : 'Search tasks…',
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                hintText: active ? '' : 'Search tasks…',
                 hintStyle: const TextStyle(color: plannerFaint, fontSize: 13),
                 contentPadding: const EdgeInsets.symmetric(vertical: 8),
               ),
@@ -194,6 +234,7 @@ class _FilterBarState extends State<FilterBar> {
                 onSaveView: widget.onSaveView,
                 onDeleteView: widget.onDeleteView,
                 onApplyView: widget.onApplyView,
+                onSetDefaultView: widget.onSetDefaultView,
                 onClose: _menu.close,
               ),
             ],
@@ -357,6 +398,7 @@ class _FilterMenu extends StatelessWidget {
     required this.onSaveView,
     required this.onDeleteView,
     required this.onApplyView,
+    required this.onSetDefaultView,
     required this.onClose,
   });
 
@@ -369,6 +411,7 @@ class _FilterMenu extends StatelessWidget {
   final void Function(String name, bool isDefault) onSaveView;
   final ValueChanged<SavedView> onDeleteView;
   final ValueChanged<SavedView> onApplyView;
+  final void Function(SavedView view, bool isDefault) onSetDefaultView;
   final VoidCallback onClose;
 
   @override
@@ -450,6 +493,7 @@ class _FilterMenu extends StatelessWidget {
               savedViews: savedViews,
               onSaveView: onSaveView,
               onDeleteView: onDeleteView,
+              onSetDefaultView: onSetDefaultView,
               onApplyView: (view) {
                 onApplyView(view);
                 onClose();
@@ -626,12 +670,18 @@ class _MenuRow extends StatefulWidget {
     required this.selected,
     required this.onTap,
     this.trailing,
+    this.alwaysShowTrailing = false,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onTap;
   final Widget? trailing;
+
+  /// Keeps [trailing] on screen instead of revealing it on hover. The
+  /// favourites star is state, not an action: which filter opens the board
+  /// has to be readable without pointing at every row to find out.
+  final bool alwaysShowTrailing;
 
   @override
   State<_MenuRow> createState() => _MenuRowState();
@@ -681,10 +731,13 @@ class _MenuRowState extends State<_MenuRow> {
                   ),
                 ),
               ),
-              // Shown on hover only. A delete button on every row is visual
-              // noise and an easy misclick; it also needs its width back for
-              // the label, which is what overflowed the column.
-              if (widget.trailing != null && _hovered) widget.trailing!,
+              // Shown on hover only, unless the row asks otherwise. A delete
+              // button on every row is visual noise and an easy misclick; it
+              // also needs its width back for the label, which is what
+              // overflowed the column.
+              if (widget.trailing != null &&
+                  (_hovered || widget.alwaysShowTrailing))
+                widget.trailing!,
             ],
           ),
         ),
@@ -701,6 +754,7 @@ class _Favorites extends StatefulWidget {
     required this.onSaveView,
     required this.onDeleteView,
     required this.onApplyView,
+    required this.onSetDefaultView,
   });
 
   final BoardSearch search;
@@ -708,6 +762,7 @@ class _Favorites extends StatefulWidget {
   final void Function(String name, bool isDefault) onSaveView;
   final ValueChanged<SavedView> onDeleteView;
   final ValueChanged<SavedView> onApplyView;
+  final void Function(SavedView view, bool isDefault) onSetDefaultView;
 
   @override
   State<_Favorites> createState() => _FavoritesState();
@@ -775,10 +830,31 @@ class _FavoritesState extends State<_Favorites> {
               label: view.name,
               selected: view.isDefault,
               onTap: () => widget.onApplyView(view),
-              trailing: _IconButton(
-                icon: Icons.delete_outline_rounded,
-                tooltip: 'Delete',
-                onTap: () => widget.onDeleteView(view),
+              // The star is the row's state, so it stays put; delete still
+              // waits for hover, one line down.
+              alwaysShowTrailing: view.isDefault,
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // The default star lives on the row, so a filter saved
+                  // yesterday can become the default without re-saving it.
+                  _IconButton(
+                    icon: view.isDefault
+                        ? Icons.star_rounded
+                        : Icons.star_outline_rounded,
+                    color: view.isDefault ? plannerYellow : null,
+                    tooltip: view.isDefault
+                        ? 'Default — applies when this board opens. '
+                              'Click to clear.'
+                        : 'Apply automatically when this board opens',
+                    onTap: () => widget.onSetDefaultView(view, !view.isDefault),
+                  ),
+                  _IconButton(
+                    icon: Icons.delete_outline_rounded,
+                    tooltip: 'Delete',
+                    onTap: () => widget.onDeleteView(view),
+                  ),
+                ],
               ),
             ),
 
@@ -831,31 +907,34 @@ class _FavoritesState extends State<_Favorites> {
               ),
             ),
           const SizedBox(height: 6),
-          GestureDetector(
-            onTap: () => setState(() => _isDefault = !_isDefault),
-            child: Row(
-              children: [
-                SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: Checkbox(
-                    value: _isDefault,
-                    visualDensity: VisualDensity.compact,
-                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    onChanged: (value) =>
-                        setState(() => _isDefault = value ?? false),
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => setState(() => _isDefault = !_isDefault),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: Checkbox(
+                      value: _isDefault,
+                      visualDensity: VisualDensity.compact,
+                      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      onChanged: (value) =>
+                          setState(() => _isDefault = value ?? false),
+                    ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                const Flexible(
-                  child: Text(
-                    'Use as default',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: plannerText, fontSize: 12),
+                  const SizedBox(width: 8),
+                  const Flexible(
+                    child: Text(
+                      'Use as default',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: plannerText, fontSize: 12),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 9),
@@ -898,11 +977,16 @@ class _IconButton extends StatefulWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.color,
   });
 
   final IconData icon;
   final String tooltip;
   final VoidCallback onTap;
+
+  /// Overrides the resting grey — the favourites star, for one, stays yellow
+  /// while it is the active default.
+  final Color? color;
 
   @override
   State<_IconButton> createState() => _IconButtonState();
@@ -931,7 +1015,7 @@ class _IconButtonState extends State<_IconButton> {
             child: Icon(
               widget.icon,
               size: 15,
-              color: _hovered ? plannerText : plannerMuted,
+              color: widget.color ?? (_hovered ? plannerText : plannerMuted),
             ),
           ),
         ),

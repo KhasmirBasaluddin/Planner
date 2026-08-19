@@ -1,8 +1,10 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 
+import '../../core/notifications/desktop_toast.dart';
 import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
 import '../../models/board_filter.dart';
@@ -11,6 +13,7 @@ import '../../shared/utils/planner_colors.dart';
 import '../workspace/join_workspace_dialog.dart';
 import '../workspace/members_dialog.dart';
 import 'widgets/app_navbar.dart';
+import 'widgets/attention_banner.dart';
 import 'widgets/board_calendar.dart';
 import 'widgets/board_header.dart';
 import 'widgets/board_kanban.dart';
@@ -18,6 +21,7 @@ import 'widgets/board_table.dart';
 import 'widgets/board_toolbar.dart';
 import 'widgets/planner_dialogs.dart';
 import 'widgets/planner_sidebar.dart';
+import 'widgets/send_back_dialog.dart';
 
 class PlannerPage extends StatefulWidget {
   const PlannerPage({super.key, required this.auth, required this.repository});
@@ -53,6 +57,62 @@ class _PlannerPageState extends State<PlannerPage> {
   List<PendingInvite> _pendingInvites = [];
   List<AppNotification> _notifications = [];
   String _myProfileName = '';
+
+  /// Ids present at the last bell refresh; null until the first one. What the
+  /// next refresh brings beyond these is genuinely new and gets announced.
+  Set<String>? _seenNotificationIds;
+
+  /// The attention banner set the user dismissed. Compared against the
+  /// current set's signature, so any change — a new overdue task, one
+  /// resolved — brings the banner back.
+  String? _dismissedAttentionSignature;
+
+  /// The task the attention banner just revealed. Its row or card carries
+  /// [_highlightKey] and lights up until the timer clears this again.
+  String? _highlightedTaskId;
+  Timer? _highlightTimer;
+
+  /// One key per view, not one shared between them.
+  ///
+  /// AnimatedSwitcher keeps the outgoing view in the tree while the incoming
+  /// one fades in, so a single GlobalKey was attached in two places at once
+  /// and Flutter tore the tree apart complaining about a duplicate. Each view
+  /// gets its own; the scroll below reads whichever belongs to the mode on
+  /// screen.
+  final Map<ViewMode, GlobalKey> _highlightKeys = {
+    for (final mode in ViewMode.values) mode: GlobalKey(),
+  };
+
+  GlobalKey get _highlightKey => _highlightKeys[_mode]!;
+
+  /// Coalesces realtime bursts into one board reload — see [_scheduleRefresh].
+  Timer? _refreshDebounce;
+  bool _refreshing = false;
+  bool _refreshQueued = false;
+
+  /// Boards a realtime event touched since the last fetch. Only these are
+  /// re-read, so one teammate's edit no longer costs everyone the whole
+  /// workspace.
+  final Set<String> _dirtyBoardIds = <String>{};
+
+  /// Set when a change was wider than one board — a board added, deleted or
+  /// reordered — and the list itself has to be re-read.
+  bool _refreshAllQueued = false;
+
+  /// Memoisation for [_attentionEntries] and [_visibleGroups]. Both walk
+  /// every task on the board, so they are cached against the exact inputs
+  /// that decide their result and recomputed only when one of those changes.
+  Board? _attentionSource;
+  List<AttentionEntry>? _attentionCache;
+  Board? _groupsSource;
+  BoardSearch? _groupsSearch;
+  TaskOrder? _groupsOrder;
+  List<TaskGroup>? _groupsCache;
+
+  /// Icons-only sidebar by user choice, remembered across launches. Narrow
+  /// windows still force the compact rail regardless of this.
+  static const String _sidebarCollapsedPrefKey = 'sidebar_collapsed';
+  bool _sidebarCollapsed = false;
 
   Workspace? get _workspace {
     if (_workspaces.isEmpty) {
@@ -112,12 +172,86 @@ class _PlannerPageState extends State<PlannerPage> {
     );
   }
 
+  /// Unfinished tasks on the current board that deserve a push: overdue, due
+  /// within a day, or marked urgent. Computed from the full board rather than
+  /// the filtered view, so an active filter cannot hide a deadline.
+  ///
+  /// Memoised against the board it was computed from. This walks every task
+  /// on the board, and it used to run on every rebuild — including the ones a
+  /// mouse hover triggers, which is thousands of comparisons per second of
+  /// pointer movement on a busy board.
+  List<AttentionEntry> get _attentionEntries {
+    final board = _selectedBoard;
+    if (board == null) {
+      return const [];
+    }
+    if (identical(board, _attentionSource) && _attentionCache != null) {
+      return _attentionCache!;
+    }
+    final entries = _computeAttentionEntries(board);
+    _attentionSource = board;
+    _attentionCache = entries;
+    return entries;
+  }
+
+  List<AttentionEntry> _computeAttentionEntries(Board board) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final entries = <AttentionEntry>[];
+    for (final group in board.groups) {
+      for (final task in group.tasks) {
+        if (board.isDone(task)) {
+          continue;
+        }
+        final due = task.dueDate;
+        final dueDay = due == null
+            ? null
+            : DateTime(due.year, due.month, due.day);
+        final overdue = dueDay != null && dueDay.isBefore(today);
+        final dueSoon =
+            dueDay != null && !overdue && dueDay.difference(today).inDays <= 1;
+        final urgent = task.priority == TaskPriority.urgent;
+        if (overdue || dueSoon || urgent) {
+          entries.add(
+            AttentionEntry(
+              task: task,
+              overdue: overdue,
+              dueSoon: dueSoon,
+              urgent: urgent,
+            ),
+          );
+        }
+      }
+    }
+    entries.sort((a, b) => a.rank.compareTo(b.rank));
+    return entries;
+  }
+
+  /// The board as the active view should show it: filtered, grouped, sorted.
+  ///
+  /// Memoised for the same reason as [_attentionEntries] — this runs a filter
+  /// predicate over every task and then sorts, and a rebuild happens far more
+  /// often than the board, the search, or the sort order actually change.
   List<TaskGroup> get _visibleGroups {
     final board = _selectedBoard;
     if (board == null) {
       return [];
     }
+    if (identical(board, _groupsSource) &&
+        _search == _groupsSearch &&
+        _taskOrder == _groupsOrder &&
+        _groupsCache != null) {
+      return _groupsCache!;
+    }
+    final groups = _computeVisibleGroups(board);
+    _groupsSource = board;
+    _groupsSearch = _search;
+    _groupsOrder = _taskOrder;
+    _groupsCache = groups;
+    return groups;
+  }
 
+  List<TaskGroup> _computeVisibleGroups(Board board) {
     final context = _filterContext;
     final filters = _filters;
 
@@ -310,10 +444,27 @@ class _PlannerPageState extends State<PlannerPage> {
   void initState() {
     super.initState();
     _bootstrap();
+    _loadSidebarPreference();
+  }
+
+  Future<void> _loadSidebarPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted && (prefs.getBool(_sidebarCollapsedPrefKey) ?? false)) {
+      setState(() => _sidebarCollapsed = true);
+    }
+  }
+
+  void _toggleSidebar() {
+    setState(() => _sidebarCollapsed = !_sidebarCollapsed);
+    SharedPreferences.getInstance().then(
+      (prefs) => prefs.setBool(_sidebarCollapsedPrefKey, _sidebarCollapsed),
+    );
   }
 
   @override
   void dispose() {
+    _highlightTimer?.cancel();
+    _refreshDebounce?.cancel();
     _searchController.dispose();
     final channel = _channel;
     if (channel != null) {
@@ -434,27 +585,111 @@ class _PlannerPageState extends State<PlannerPage> {
     }
     _channel = widget.repository.subscribeToChanges(
       workspaceId: workspaceId,
-      onChange: () {
-        if (mounted) {
-          _refreshBoards();
-        }
-      },
+      // Debounced and scoped. Every row change in the workspace lands here —
+      // a teammate typing in a task chat fires one per message — so a burst
+      // is coalesced into a single fetch, and that fetch pulls back only the
+      // boards actually touched rather than the whole workspace.
+      onChange: _scheduleRefresh,
     );
   }
 
-  /// Reloads boards without touching loading state, for background refreshes.
-  Future<void> _refreshBoards() async {
+  /// Collapses a burst of realtime events into a single reload.
+  ///
+  /// [boardId] names the board a change touched; null means the change was
+  /// wider than one board and the whole list has to be re-read.
+  void _scheduleRefresh(String? boardId) {
+    if (!mounted) {
+      return;
+    }
+    if (boardId == null) {
+      _refreshAllQueued = true;
+    } else {
+      _dirtyBoardIds.add(boardId);
+    }
+    _refreshDebounce?.cancel();
+    _refreshDebounce = Timer(
+      const Duration(milliseconds: 400),
+      () => unawaited(_refreshBoards()),
+    );
+  }
+
+  /// Re-reads just the board on screen, after an edit made here.
+  ///
+  /// The realtime echo of your own write arrives too, and would refresh the
+  /// same board a moment later — but waiting for the round trip to show your
+  /// own change is what makes an app feel slow.
+  Future<void> _refreshSelectedBoard() async {
+    final board = _selectedBoard;
+    if (board == null) {
+      return;
+    }
+    _dirtyBoardIds.add(board.id);
+    await _refreshBoards();
+  }
+
+  /// Reloads whatever is stale, without touching loading state.
+  ///
+  /// Guarded against overlap: two fetches in flight at once cost twice the
+  /// bandwidth and the slower one wins, which showed up as the board briefly
+  /// reverting a change that had already landed.
+  Future<void> _refreshBoards({bool full = false}) async {
     final workspace = _workspace;
     if (workspace == null) {
       return;
     }
+    if (_refreshing) {
+      _refreshQueued = true;
+      return;
+    }
+
+    // Claimed up front: anything arriving while the fetch is in flight
+    // belongs to the *next* pass, not this one.
+    final wantsAll = full || _refreshAllQueued;
+    final dirty = Set<String>.from(_dirtyBoardIds);
+    _refreshAllQueued = false;
+    _dirtyBoardIds.clear();
+
+    if (!wantsAll && dirty.isEmpty) {
+      return;
+    }
+
+    _refreshing = true;
     try {
-      final boards = await widget.repository.loadBoards(workspace.id);
-      if (mounted) {
-        setState(() => _boards = boards);
+      if (wantsAll) {
+        final boards = await widget.repository.loadBoards(workspace.id);
+        if (mounted) {
+          setState(() => _boards = boards);
+        }
+      } else {
+        // One request per touched board, in parallel. On a workspace with
+        // twenty boards this is one small fetch instead of the entire tree.
+        final fetched = await Future.wait(
+          dirty.map(widget.repository.loadBoard),
+        );
+        if (!mounted) {
+          return;
+        }
+        final replacements = {
+          for (final board in fetched.nonNulls) board.id: board,
+        };
+        // A board that came back null was deleted or is no longer visible.
+        final removed = dirty.difference(replacements.keys.toSet());
+        setState(() {
+          _boards = [
+            for (final board in _boards)
+              if (!removed.contains(board.id)) replacements[board.id] ?? board,
+          ];
+        });
       }
     } catch (_) {
       // A failed background refresh is not worth interrupting the user.
+    } finally {
+      _refreshing = false;
+      // Something arrived while this was running; serve it now.
+      if (_refreshQueued && mounted) {
+        _refreshQueued = false;
+        unawaited(_refreshBoards());
+      }
     }
   }
 
@@ -752,6 +987,40 @@ class _PlannerPageState extends State<PlannerPage> {
     }
   }
 
+  /// Makes an existing favorite the one this board opens with, or clears it.
+  ///
+  /// Separate from saving: a filter saved last week should be promotable
+  /// without re-saving it under the same name.
+  Future<void> _setDefaultView(SavedView view, bool isDefault) async {
+    final board = _selectedBoard;
+    if (board == null) {
+      return;
+    }
+    try {
+      await widget.repository.updateSavedView(
+        viewId: view.id,
+        boardId: board.id,
+        isDefault: isDefault,
+      );
+      await _loadSavedViews();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                isDefault
+                    ? '"${view.name}" now applies when this board opens.'
+                    : '"${view.name}" is no longer the default.',
+              ),
+            ),
+          );
+      }
+    } on Object catch (error) {
+      _showError(error);
+    }
+  }
+
   Future<void> _manageMembers() async {
     final workspace = _workspace;
     if (workspace == null) {
@@ -960,12 +1229,69 @@ class _PlannerPageState extends State<PlannerPage> {
   Future<void> _loadNotifications() async {
     try {
       final notifications = await widget.repository.loadNotifications();
-      if (mounted) {
-        setState(() => _notifications = notifications);
+      if (!mounted) {
+        return;
+      }
+      final previouslySeen = _seenNotificationIds;
+      setState(() => _notifications = notifications);
+      _seenNotificationIds = {for (final n in notifications) n.id};
+
+      // The first load is history, not news — only what arrives while the
+      // app is open gets announced. Capped so a burst (several tasks turning
+      // overdue at once) does not stack a wall of alerts.
+      if (previouslySeen == null) {
+        return;
+      }
+      final fresh = notifications
+          .where((n) => n.isUnread && !previouslySeen.contains(n.id))
+          .toList();
+      for (final notification in fresh.take(3)) {
+        _announceNotification(notification);
       }
     } catch (_) {
       // Same reasoning as _loadInvites: never surface an error for the bell.
     }
+  }
+
+  /// Makes a newly arrived notification impossible to miss: a system toast
+  /// for when the window is buried, and an in-app snackbar with a View action
+  /// for when it is not. Deadline alerts stay on screen longer and in red —
+  /// they are the ones that cost something when ignored.
+  void _announceNotification(AppNotification notification) {
+    unawaited(
+      DesktopToast.show(title: notification.title, body: notification.body),
+    );
+    if (!mounted) {
+      return;
+    }
+    final pressing =
+        notification.kind.isUrgent ||
+        notification.kind == NotificationKind.taskDueSoon;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: pressing ? plannerRed : plannerSidebar,
+        behavior: SnackBarBehavior.floating,
+        duration: Duration(seconds: pressing ? 10 : 5),
+        content: Row(
+          children: [
+            Icon(notification.kind.icon, size: 16, color: Colors.white),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                notification.title,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+        action: SnackBarAction(
+          label: 'View',
+          textColor: Colors.white,
+          onPressed: () => _openNotification(notification),
+        ),
+      ),
+    );
   }
 
   /// Opens whatever a notification points at, and marks it read.
@@ -1468,15 +1794,44 @@ class _PlannerPageState extends State<PlannerPage> {
     if (!_requireEditor()) {
       return;
     }
+
+    final previous = _selectedBoard?.statusById(task.statusId);
+
+    // Pulling finished work back is the one status change that needs a word
+    // of explanation — see showSendBackDialog. Cancelling there cancels the
+    // whole move, so a mis-drag costs nothing.
+    var comment = '';
+    if (previous != null && previous.isDone && !status.isDone) {
+      final decision = await showSendBackDialog(
+        context: context,
+        task: task,
+        from: previous,
+        to: status,
+      );
+      if (decision == null) {
+        return;
+      }
+      comment = decision.comment;
+    }
+
     await _guard(() async {
       await widget.repository.updateTaskStatus(
         task,
         status,
         // Passed so the activity entry can read "Working -> Done" rather than
         // just naming where it landed.
-        previous: _selectedBoard?.statusById(task.statusId),
+        previous: previous,
       );
-      await _refreshBoards();
+      if (comment.isNotEmpty) {
+        // Into the existing chat rather than a channel of its own: the
+        // send-back prefix keeps it identifiable, and the people watching the
+        // task already watch its chat.
+        await widget.repository.addComment(
+          taskId: task.id,
+          body: 'Sent back to ${status.name}: $comment',
+        );
+      }
+      await _refreshSelectedBoard();
     }, failureMessage: 'Could not update the status.');
   }
 
@@ -1492,7 +1847,7 @@ class _PlannerPageState extends State<PlannerPage> {
         // own labels.
         statuses: _selectedBoard?.statuses ?? const [],
       );
-      await _refreshBoards();
+      await _refreshSelectedBoard();
     }, failureMessage: 'Could not update the progress.');
   }
 
@@ -1569,6 +1924,68 @@ class _PlannerPageState extends State<PlannerPage> {
     }, failureMessage: 'Could not reorder tasks.');
   }
 
+  /// Shows [task] where it lives instead of opening a form over it: switches
+  /// to a view that has a row to light up, clears any filter hiding it,
+  /// expands its group, scrolls it into view and pulses it for a few seconds.
+  void _revealTask(PlannerTask task) {
+    setState(() {
+      // Stays on whatever view is open — table, kanban or calendar — and
+      // highlights the task right there. The one exception: the calendar
+      // places tasks by due date, so an undated task has nowhere to appear
+      // on it and the table steps in.
+      if (_mode == ViewMode.calendar && task.dueDate == null) {
+        _mode = ViewMode.table;
+      }
+      // A reveal that reveals nothing reads as a bug, so any filter hiding
+      // the task is dropped first.
+      final visible = _visibleGroups.any(
+        (group) => group.tasks.any((t) => t.id == task.id),
+      );
+      if (!visible) {
+        _search = const BoardSearch();
+        _searchController.clear();
+      }
+      _collapsedGroupIds.remove(task.groupId);
+      _highlightedTaskId = task.id;
+    });
+
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 4), () {
+      if (mounted) {
+        setState(() => _highlightedTaskId = null);
+      }
+    });
+
+    // After the frame, so the highlighted row exists to scroll to.
+    //
+    // Retried a few times because switching view mode animates: the row is
+    // not in the tree on the first frame after the tap, and a single attempt
+    // silently did nothing whenever the reveal also changed views. The
+    // kanban does its own index-based scroll — a lazy column has no element
+    // to find — so this is the table and calendar's path.
+    var attempts = 0;
+    void tryScroll() {
+      if (!mounted || _highlightedTaskId == null) {
+        return;
+      }
+      final target = _highlightKey.currentContext;
+      if (target != null) {
+        Scrollable.ensureVisible(
+          target,
+          alignment: 0.3,
+          duration: const Duration(milliseconds: 350),
+          curve: Curves.easeOutCubic,
+        );
+        return;
+      }
+      if (attempts++ < 5) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => tryScroll());
+      }
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) => tryScroll());
+  }
+
   Future<void> _openChat(PlannerTask task) async {
     await showTaskChatDialog(
       context: context,
@@ -1596,7 +2013,8 @@ class _PlannerPageState extends State<PlannerPage> {
     return Scaffold(
       body: LayoutBuilder(
         builder: (context, constraints) {
-          final compactSidebar = constraints.maxWidth < 1040;
+          final forcedCompact = constraints.maxWidth < 1040;
+          final compactSidebar = forcedCompact || _sidebarCollapsed;
           // Sidebar spans the full height with the navbar beside it, rather
           // than a bar across the top of everything: the rail is the app's
           // primary frame, and the bar belongs to the content area.
@@ -1610,6 +2028,7 @@ class _PlannerPageState extends State<PlannerPage> {
                 members: _members,
                 loading: _loading,
                 compact: compactSidebar,
+                onToggleCompact: forcedCompact ? null : _toggleSidebar,
                 onWorkspaceSelected: _switchWorkspace,
                 onCreateWorkspace: _createWorkspace,
                 onJoinWorkspace: _joinWorkspace,
@@ -1646,6 +2065,29 @@ class _PlannerPageState extends State<PlannerPage> {
                       onAcceptInvite: _acceptInvite,
                       onDeclineInvite: _declineInvite,
                     ),
+                    // Between the navbar and the board, so it frames everything below it.
+                    // Reappears whenever the set of pressing tasks changes —
+                    // dismissing it only silences the alerts already seen.
+                    if (!_loading && _error == null)
+                      Builder(
+                        builder: (context) {
+                          final entries = _attentionEntries;
+                          final signature = AttentionBanner.signatureOf(
+                            entries,
+                          );
+                          if (entries.isEmpty ||
+                              signature == _dismissedAttentionSignature) {
+                            return const SizedBox.shrink();
+                          }
+                          return AttentionBanner(
+                            entries: entries,
+                            onOpenTask: _revealTask,
+                            onDismiss: () => setState(
+                              () => _dismissedAttentionSignature = signature,
+                            ),
+                          );
+                        },
+                      ),
                     // A brand-new account has no workspace yet. The welcome
                     // sits in the content area so the sidebar stays visible and
                     // the layout does not jump once a workspace exists.
@@ -1659,6 +2101,8 @@ class _PlannerPageState extends State<PlannerPage> {
                     else
                       Expanded(
                         child: _PlannerContent(
+                          highlightedTaskId: _highlightedTaskId,
+                          highlightKeys: _highlightKeys,
                           loading: _loading,
                           workspaceName: _workspace?.name ?? 'your workspace',
                           error: _error,
@@ -1683,6 +2127,7 @@ class _PlannerPageState extends State<PlannerPage> {
                               setState(() => _search = value),
                           onSaveView: _saveView,
                           onDeleteView: _deleteView,
+                          onSetDefaultView: _setDefaultView,
                           onApplyView: (view) =>
                               setState(() => _search = view.search),
                           onModeChanged: (mode) => setState(() => _mode = mode),
@@ -1735,6 +2180,7 @@ class _PlannerContent extends StatelessWidget {
     required this.onSearchChanged,
     required this.onSaveView,
     required this.onDeleteView,
+    required this.onSetDefaultView,
     required this.onApplyView,
     required this.onModeChanged,
     required this.taskOrder,
@@ -1753,10 +2199,19 @@ class _PlannerContent extends StatelessWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     required this.onTaskReorder,
+    this.highlightedTaskId,
+    this.highlightKeys = const {},
   });
 
   final bool loading;
   final String? error;
+
+  /// The task the attention banner just revealed, passed through to whichever
+  /// view is active so it can light the task up and scroll to it.
+  final String? highlightedTaskId;
+
+  /// One key per view — see the field of the same name on the page state.
+  final Map<ViewMode, GlobalKey> highlightKeys;
   final Board? board;
   final String workspaceName;
   final List<TaskGroup> groups;
@@ -1772,6 +2227,7 @@ class _PlannerContent extends StatelessWidget {
   final ValueChanged<BoardSearch> onSearchChanged;
   final void Function(String name, bool isDefault) onSaveView;
   final ValueChanged<SavedView> onDeleteView;
+  final void Function(SavedView view, bool isDefault) onSetDefaultView;
   final ValueChanged<SavedView> onApplyView;
   final ValueChanged<ViewMode> onModeChanged;
   final TaskOrder taskOrder;
@@ -1830,6 +2286,7 @@ class _PlannerContent extends StatelessWidget {
           onSearchChanged: onSearchChanged,
           onSaveView: onSaveView,
           onDeleteView: onDeleteView,
+          onSetDefaultView: onSetDefaultView,
           onApplyView: onApplyView,
           taskOrder: taskOrder,
           onTaskOrderChanged: onTaskOrderChanged,
@@ -1857,6 +2314,8 @@ class _PlannerContent extends StatelessWidget {
                 ),
                 groups: groups,
                 members: members,
+                highlightedTaskId: highlightedTaskId,
+                highlightKey: highlightKeys[ViewMode.table],
                 statuses: board!.statuses,
                 collapsedGroupIds: collapsedGroupIds,
                 onToggleGroup: onToggleGroup,
@@ -1882,6 +2341,8 @@ class _PlannerContent extends StatelessWidget {
                 ),
                 groups: groups,
                 members: members,
+                highlightedTaskId: highlightedTaskId,
+                highlightKey: highlightKeys[ViewMode.kanban],
                 statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,
@@ -1895,6 +2356,8 @@ class _PlannerContent extends StatelessWidget {
                 ),
                 groups: groups,
                 members: members,
+                highlightedTaskId: highlightedTaskId,
+                highlightKey: highlightKeys[ViewMode.calendar],
                 statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,

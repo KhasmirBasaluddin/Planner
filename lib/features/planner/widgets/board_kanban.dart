@@ -16,10 +16,17 @@ class BoardKanban extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
+
+  /// The task the attention banner just revealed, if any. Its card lights up
+  /// and carries [highlightKey] so the page can scroll it into view.
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
 
   /// One column per status the board defines, in display order.
   final List<StatusLabel> statuses;
@@ -49,11 +56,38 @@ class BoardKanban extends StatelessWidget {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final padding = constraints.maxWidth < 720 ? 14.0 : 24.0;
+        // Deliberately tight: the goal is every status on screen at once,
+        // even on a small laptop with the sidebar open. Columns share the
+        // width equally down to a minimum where a card is still readable;
+        // past that they wrap into rows rather than scrolling sideways, so
+        // no status is ever hidden off-screen.
+        const gap = 10.0;
+        const minColumnWidth = 170.0;
+        final padding = constraints.maxWidth < 1100 ? 12.0 : 20.0;
+        final available = constraints.maxWidth - padding * 2;
         final height = constraints.maxHeight - 32;
-        final useFluidColumns = constraints.maxWidth >= 1160;
+        final columns = statuses.isEmpty ? 1 : statuses.length;
 
-        if (useFluidColumns) {
+        // How many columns fit side by side without dropping below the
+        // minimum width.
+        final fitCount = ((available + gap) / (minColumnWidth + gap))
+            .floor()
+            .clamp(1, columns);
+
+        Widget columnFor(StatusLabel status) => _KanbanColumn(
+          status: status,
+          tasks: _tasksByStatus(tasks, status),
+          members: members,
+          onEditTask: onEditTask,
+          onDeleteTask: onDeleteTask,
+          onStatusChanged: onStatusChanged,
+          onProgressChanged: onProgressChanged,
+          onOpenChat: onOpenChat,
+          highlightedTaskId: highlightedTaskId,
+          highlightKey: highlightKey,
+        );
+
+        if (fitCount >= columns) {
           return Padding(
             padding: EdgeInsets.fromLTRB(padding, 16, padding, 16),
             child: SizedBox(
@@ -62,19 +96,8 @@ class BoardKanban extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   for (final status in statuses) ...[
-                    Expanded(
-                      child: _KanbanColumn(
-                        status: status,
-                        tasks: _tasksByStatus(tasks, status),
-                        members: members,
-                        onEditTask: onEditTask,
-                        onDeleteTask: onDeleteTask,
-                        onStatusChanged: onStatusChanged,
-                        onProgressChanged: onProgressChanged,
-                        onOpenChat: onOpenChat,
-                      ),
-                    ),
-                    if (status != statuses.last) const SizedBox(width: 12),
+                    Expanded(child: columnFor(status)),
+                    if (status != statuses.last) const SizedBox(width: gap),
                   ],
                 ],
               ),
@@ -82,61 +105,22 @@ class BoardKanban extends StatelessWidget {
           );
         }
 
-        if (constraints.maxWidth >= 760) {
-          return GridView.count(
-            padding: EdgeInsets.fromLTRB(padding, 16, padding, 16),
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-            childAspectRatio: 1.22,
-            children: [
-              for (final status in statuses)
-                _KanbanColumn(
-                  status: status,
-                  tasks: _tasksByStatus(tasks, status),
-                  members: members,
-                  onEditTask: onEditTask,
-                  onDeleteTask: onDeleteTask,
-                  onStatusChanged: onStatusChanged,
-                  onProgressChanged: onProgressChanged,
-                  onOpenChat: onOpenChat,
-                ),
-            ],
-          );
-        }
-
-        final columnWidth = (constraints.maxWidth - padding * 2).clamp(
+        // Too narrow for one row: wrap into as many rows as needed, sized so
+        // the whole grid fills the viewport without leftover space below.
+        final rows = (columns / fitCount).ceil();
+        final cellWidth = (available - gap * (fitCount - 1)) / fitCount;
+        final cellHeight = ((height - gap * (rows - 1)) / rows).clamp(
           280.0,
-          320.0,
+          520.0,
         );
 
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
+        return GridView.count(
           padding: EdgeInsets.fromLTRB(padding, 16, padding, 16),
-          child: SizedBox(
-            height: height,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                for (final status in statuses) ...[
-                  SizedBox(
-                    width: columnWidth,
-                    child: _KanbanColumn(
-                      status: status,
-                      tasks: _tasksByStatus(tasks, status),
-                      members: members,
-                      onEditTask: onEditTask,
-                      onDeleteTask: onDeleteTask,
-                      onStatusChanged: onStatusChanged,
-                      onProgressChanged: onProgressChanged,
-                      onOpenChat: onOpenChat,
-                    ),
-                  ),
-                  if (status != statuses.last) const SizedBox(width: 12),
-                ],
-              ],
-            ),
-          ),
+          crossAxisCount: fitCount,
+          crossAxisSpacing: gap,
+          mainAxisSpacing: gap,
+          childAspectRatio: cellWidth / cellHeight,
+          children: [for (final status in statuses) columnFor(status)],
         );
       },
     );
@@ -147,7 +131,11 @@ List<_KanbanTask> _tasksByStatus(List<_KanbanTask> tasks, StatusLabel status) {
   return tasks.where((entry) => entry.task.statusId == status.id).toList();
 }
 
-class _KanbanColumn extends StatelessWidget {
+/// Roughly how tall one card runs: title, meta row, progress and padding.
+/// Used only to estimate a scroll offset when revealing a task.
+const double _cardExtent = 132;
+
+class _KanbanColumn extends StatefulWidget {
   const _KanbanColumn({
     required this.status,
     required this.tasks,
@@ -157,11 +145,15 @@ class _KanbanColumn extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    this.highlightedTaskId,
+    this.highlightKey,
   });
 
   final StatusLabel status;
   final List<_KanbanTask> tasks;
   final List<WorkspaceMember> members;
+  final String? highlightedTaskId;
+  final GlobalKey? highlightKey;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, StatusLabel status)
@@ -171,7 +163,81 @@ class _KanbanColumn extends StatelessWidget {
   final ValueChanged<PlannerTask> onOpenChat;
 
   @override
+  State<_KanbanColumn> createState() => _KanbanColumnState();
+}
+
+class _KanbanColumnState extends State<_KanbanColumn> {
+  /// One per column, so a reveal can scroll *this* list to the card.
+  final ScrollController _scroll = ScrollController();
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollToHighlight();
+  }
+
+  @override
+  void didUpdateWidget(covariant _KanbanColumn oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.highlightedTaskId != oldWidget.highlightedTaskId) {
+      _scrollToHighlight();
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  /// Brings the revealed card into view.
+  ///
+  /// Scrolls by *index* rather than leaving it to Scrollable.ensureVisible:
+  /// a ListView only builds what is on screen, so a card fifteen rows down
+  /// has no element for ensureVisible to find and the highlight landed on a
+  /// task nobody could see. The card height is uniform enough to estimate,
+  /// and the result is clamped to the list's own extent.
+  void _scrollToHighlight() {
+    final id = widget.highlightedTaskId;
+    if (id == null) {
+      return;
+    }
+    final index = widget.tasks.indexWhere((entry) => entry.task.id == id);
+    if (index < 0) {
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients) {
+        return;
+      }
+      // Card plus separator. Cards vary a little with title length, so this
+      // lands the target near the top of the column rather than exactly at
+      // it — close enough that the highlight is unmissable.
+      const estimatedExtent = _cardExtent + 8;
+      final target = (index * estimatedExtent).clamp(
+        0.0,
+        _scroll.position.maxScrollExtent,
+      );
+      _scroll.animateTo(
+        target,
+        duration: const Duration(milliseconds: 350),
+        curve: Curves.easeOutCubic,
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final status = widget.status;
+    final tasks = widget.tasks;
+    final members = widget.members;
+    final highlightedTaskId = widget.highlightedTaskId;
+    final highlightKey = widget.highlightKey;
+    final onEditTask = widget.onEditTask;
+    final onDeleteTask = widget.onDeleteTask;
+    final onStatusChanged = widget.onStatusChanged;
+    final onProgressChanged = widget.onProgressChanged;
+    final onOpenChat = widget.onOpenChat;
     final color = statusColor(status);
     return DragTarget<PlannerTask>(
       onWillAcceptWithDetails: (details) => details.data.statusId != status.id,
@@ -214,12 +280,18 @@ class _KanbanColumn extends StatelessWidget {
                         ),
                       ),
                     ),
-                    Text(
-                      '${tasks.length}',
-                      style: const TextStyle(
-                        color: plannerMuted,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+                    Tooltip(
+                      message:
+                          '${tasks.length} '
+                          'task${tasks.length == 1 ? '' : 's'} '
+                          'in ${status.name}',
+                      child: Text(
+                        '${tasks.length}',
+                        style: const TextStyle(
+                          color: plannerMuted,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
                   ],
@@ -229,11 +301,14 @@ class _KanbanColumn extends StatelessWidget {
                 child: tasks.isEmpty
                     ? _EmptyColumn(hovering: hovering)
                     : ListView.separated(
+                        controller: _scroll,
                         padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
                         itemCount: tasks.length,
                         separatorBuilder: (_, _) => const SizedBox(height: 8),
                         itemBuilder: (context, index) {
                           final entry = tasks[index];
+                          final highlighted =
+                              entry.task.id == highlightedTaskId;
                           final card = _KanbanCard(
                             entry: entry,
                             status: status,
@@ -242,46 +317,60 @@ class _KanbanColumn extends StatelessWidget {
                             onDeleteTask: onDeleteTask,
                             onProgressChanged: onProgressChanged,
                             onOpenChat: onOpenChat,
+                            highlighted: highlighted,
                           );
-                          return LayoutBuilder(
-                            builder: (context, constraints) {
-                              return Draggable<PlannerTask>(
-                                data: entry.task,
-                                dragAnchorStrategy: childDragAnchorStrategy,
-                                feedback: SizedBox(
-                                  width: constraints.maxWidth,
-                                  child: Material(
-                                    color: Colors.transparent,
-                                    child: Container(
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(
-                                          radiusSm,
-                                        ),
-                                        boxShadow: const [
-                                          BoxShadow(
-                                            color: Color(0x1F101828),
-                                            blurRadius: 16,
-                                            offset: Offset(0, 8),
-                                          ),
-                                        ],
-                                      ),
-                                      child: card,
-                                    ),
-                                  ),
-                                ),
-                                childWhenDragging: Opacity(
-                                  opacity: 0.4,
-                                  child: card,
-                                ),
-                                child: card,
-                              );
-                            },
+                          final key = highlighted ? highlightKey : null;
+                          // RepaintBoundary per card: without it, one card's
+                          // hover or drag repaints the whole column, which is
+                          // what made a long list feel heavy under the mouse.
+                          if (key != null) {
+                            return RepaintBoundary(
+                              child: KeyedSubtree(
+                                key: key,
+                                child: _draggableCard(entry, card),
+                              ),
+                            );
+                          }
+                          return RepaintBoundary(
+                            child: _draggableCard(entry, card),
                           );
                         },
                       ),
               ),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  Widget _draggableCard(_KanbanTask entry, Widget card) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return Draggable<PlannerTask>(
+          data: entry.task,
+          dragAnchorStrategy: childDragAnchorStrategy,
+          feedback: SizedBox(
+            width: constraints.maxWidth,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(radiusSm),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Color(0x1F101828),
+                      blurRadius: 16,
+                      offset: Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: card,
+              ),
+            ),
+          ),
+          childWhenDragging: Opacity(opacity: 0.4, child: card),
+          child: card,
         );
       },
     );
@@ -297,9 +386,13 @@ class _KanbanCard extends StatelessWidget {
     required this.onDeleteTask,
     required this.onProgressChanged,
     required this.onOpenChat,
+    this.highlighted = false,
   });
 
   final _KanbanTask entry;
+
+  /// True while the attention banner is pointing at this card.
+  final bool highlighted;
 
   /// The column's status — a card only ever appears under its own.
   final StatusLabel status;
@@ -319,100 +412,149 @@ class _KanbanCard extends StatelessWidget {
     // column of solid cards reads as one block and the titles stop standing
     // out from each other.
     final tone = statusColor(status);
-    return InkWell(
-      onTap: () => onEditTask(task),
-      borderRadius: BorderRadius.circular(radiusSm),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
-        decoration: BoxDecoration(
-          color: Color.alphaBlend(tint(tone, 0.07), Colors.white),
-          borderRadius: BorderRadius.circular(radiusSm),
-          border: Border.all(color: tint(tone, 0.22)),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x0A101828),
-              blurRadius: 2,
-              offset: Offset(0, 1),
+    // Delayed, so it guides someone hovering in doubt without flashing at
+    // everyone who is just mousing across the board.
+    return Tooltip(
+      message: 'Open task — drag to another column to change status',
+      waitDuration: const Duration(milliseconds: 700),
+      child: InkWell(
+        onTap: () => onEditTask(task),
+        borderRadius: BorderRadius.circular(radiusSm),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 350),
+          padding: const EdgeInsets.fromLTRB(12, 10, 8, 12),
+          decoration: BoxDecoration(
+            color: Color.alphaBlend(
+              highlighted ? tint(plannerBlue, 0.10) : tint(tone, 0.07),
+              Colors.white,
             ),
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(
-                  child: Padding(
-                    padding: const EdgeInsets.only(top: 3),
-                    child: Text(
-                      task.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: plannerInk,
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w600,
-                        height: 1.3,
+            borderRadius: BorderRadius.circular(radiusSm),
+            border: Border.all(
+              color: highlighted ? plannerBlue : tint(tone, 0.22),
+              width: highlighted ? 1.4 : 1,
+            ),
+            boxShadow: highlighted
+                ? [
+                    BoxShadow(
+                      color: tint(plannerBlue, 0.35),
+                      blurRadius: 10,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : const [
+                    BoxShadow(
+                      color: Color(0x0A101828),
+                      blurRadius: 2,
+                      offset: Offset(0, 1),
+                    ),
+                  ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        task.title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerInk,
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w600,
+                          height: 1.3,
+                        ),
                       ),
                     ),
                   ),
-                ),
-                ChatButton(task: task, onOpenChat: onOpenChat, size: 26),
-                _TaskMenu(
-                  onEdit: () => onEditTask(task),
-                  onDelete: () => onDeleteTask(task),
-                ),
-              ],
-            ),
-            const SizedBox(height: 6),
-            Row(
-              children: [
-                Container(
-                  width: 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: entry.group.color,
-                    shape: BoxShape.circle,
+                  ChatButton(task: task, onOpenChat: onOpenChat, size: 26),
+                  _TaskMenu(
+                    onEdit: () => onEditTask(task),
+                    onDelete: () => onDeleteTask(task),
                   ),
-                ),
-                const SizedBox(width: 6),
-                Flexible(
-                  child: Text(
-                    entry.group.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: plannerMuted, fontSize: 12),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Icon(
-                  Icons.flag_rounded,
-                  size: 11,
-                  color: priorityColor(task.priority),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  task.priority.label,
-                  style: const TextStyle(color: plannerMuted, fontSize: 12),
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: _TaskMetaRow(task: task, status: status, members: members),
-            ),
-            const SizedBox(height: 10),
-            Padding(
-              padding: const EdgeInsets.only(right: 4),
-              child: _CompactProgress(
-                task: task,
-                status: status,
-                onChanged: (progress) => onProgressChanged(task, progress),
+                ],
               ),
-            ),
-          ],
+              const SizedBox(height: 6),
+              Row(
+                children: [
+                  Flexible(
+                    child: Tooltip(
+                      message: 'Group: ${entry.group.name}',
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: entry.group.color,
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: Text(
+                              entry.group.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: plannerMuted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Tooltip(
+                    message: 'Priority: ${task.priority.label}',
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.flag_rounded,
+                          size: 11,
+                          color: priorityColor(task.priority),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          task.priority.label,
+                          style: const TextStyle(
+                            color: plannerMuted,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: _TaskMetaRow(
+                  task: task,
+                  status: status,
+                  members: members,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.only(right: 4),
+                child: _CompactProgress(
+                  task: task,
+                  status: status,
+                  onChanged: (progress) => onProgressChanged(task, progress),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -441,16 +583,29 @@ class _TaskMetaRow extends StatelessWidget {
       children: [
         AssigneeAvatars(task: task, members: members),
         const SizedBox(width: 8),
-        Icon(Icons.event_outlined, size: 13, color: dueColor),
-        const SizedBox(width: 4),
         Expanded(
-          child: Text(
-            due == null ? 'No date' : formatDate(due),
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: dueColor,
-              fontSize: 12,
-              fontWeight: overdue ? FontWeight.w600 : FontWeight.w400,
+          child: Tooltip(
+            message: due == null
+                ? 'No due date set'
+                : overdue
+                ? 'Overdue — was due ${formatDate(due)}'
+                : 'Due ${formatDate(due)}',
+            child: Row(
+              children: [
+                Icon(Icons.event_outlined, size: 13, color: dueColor),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    due == null ? 'No date' : formatDate(due),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: dueColor,
+                      fontSize: 12,
+                      fontWeight: overdue ? FontWeight.w600 : FontWeight.w400,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),

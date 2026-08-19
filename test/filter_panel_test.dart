@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:planner/features/planner/widgets/filter_panel.dart';
@@ -25,6 +26,7 @@ void main() {
     void Function(String name, bool isDefault)? onSaveView,
     ValueChanged<SavedView>? onDeleteView,
     ValueChanged<SavedView>? onApplyView,
+    void Function(SavedView view, bool isDefault)? onSetDefaultView,
     TaskOrder taskOrder = TaskOrder.manual,
     ValueChanged<TaskOrder>? onTaskOrderChanged,
   }) {
@@ -41,6 +43,7 @@ void main() {
             onSaveView: onSaveView ?? (_, _) {},
             onDeleteView: onDeleteView ?? (_) {},
             onApplyView: onApplyView ?? (_) {},
+            onSetDefaultView: onSetDefaultView ?? (_, _) {},
             taskOrder: taskOrder,
             onTaskOrderChanged: onTaskOrderChanged ?? (_) {},
           ),
@@ -226,6 +229,78 @@ void main() {
 
       expect(applied?.id, 'v1');
       expect(applied?.search.filterIds, {'overdue'});
+    });
+
+    // Promoting an existing favorite, without re-saving it under the same
+    // name — the star on the row is the only way to do that.
+    testWidgets('the star promotes a favorite to the default', (tester) async {
+      desktop(tester);
+      SavedView? promoted;
+      bool? promotedTo;
+      final view = SavedView(
+        id: 'v1',
+        boardId: 'b1',
+        name: 'My overdue work',
+        search: const BoardSearch().toggle('overdue'),
+      );
+
+      await tester.pumpWidget(
+        harness(
+          search: const BoardSearch(),
+          savedViews: [view],
+          onSetDefaultView: (value, isDefault) {
+            promoted = value;
+            promotedTo = isDefault;
+          },
+        ),
+      );
+      await open(tester);
+      // The row's controls appear on hover while it is not the default.
+      final pointer = TestPointer(1, PointerDeviceKind.mouse);
+      await tester.sendEventToBinding(
+        pointer.hover(tester.getCenter(find.text('My overdue work'))),
+      );
+      await tester.pumpAndSettle();
+
+      // Scoped to the row: the Favorites section header carries an outline
+      // star of its own.
+      await tester.tap(
+        find.descendant(
+          of: find.byTooltip('Apply automatically when this board opens'),
+          matching: find.byIcon(Icons.star_outline_rounded),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(promoted?.id, 'v1');
+      expect(promotedTo, isTrue);
+    });
+
+    testWidgets('the star clears a default that is already set', (
+      tester,
+    ) async {
+      desktop(tester);
+      bool? promotedTo;
+      final view = SavedView(
+        id: 'v1',
+        boardId: 'b1',
+        name: 'My overdue work',
+        search: const BoardSearch().toggle('overdue'),
+        isDefault: true,
+      );
+
+      await tester.pumpWidget(
+        harness(
+          search: const BoardSearch(),
+          savedViews: [view],
+          onSetDefaultView: (_, isDefault) => promotedTo = isDefault,
+        ),
+      );
+      await open(tester);
+      await tester.tap(find.byIcon(Icons.star_rounded));
+      await tester.pumpAndSettle();
+
+      expect(promotedTo, isFalse);
     });
 
     testWidgets('saving asks for a name and reports it', (tester) async {

@@ -1,6 +1,10 @@
+import 'dart:async';
+
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/supabase/planner_repository.dart';
 import '../../../models/planner_models.dart';
@@ -277,25 +281,28 @@ class _ColorSwatchRow extends StatelessWidget {
       runSpacing: 8,
       children: [
         for (final color in accentPalette)
-          GestureDetector(
-            onTap: () => onSelected(color),
-            child: Container(
-              width: 28,
-              height: 28,
-              decoration: BoxDecoration(
-                color: color,
-                borderRadius: BorderRadius.circular(radiusSm),
-                border: color.toARGB32() == selected.toARGB32()
-                    ? Border.all(color: plannerInk, width: 2)
+          MouseRegion(
+            cursor: SystemMouseCursors.click,
+            child: GestureDetector(
+              onTap: () => onSelected(color),
+              child: Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(radiusSm),
+                  border: color.toARGB32() == selected.toARGB32()
+                      ? Border.all(color: plannerInk, width: 2)
+                      : null,
+                ),
+                child: color.toARGB32() == selected.toARGB32()
+                    ? const Icon(
+                        Icons.check_rounded,
+                        size: 15,
+                        color: Colors.white,
+                      )
                     : null,
               ),
-              child: color.toARGB32() == selected.toARGB32()
-                  ? const Icon(
-                      Icons.check_rounded,
-                      size: 15,
-                      color: Colors.white,
-                    )
-                  : null,
             ),
           ),
       ],
@@ -1354,6 +1361,26 @@ String formatDate(DateTime date) {
   return '${date.day} $month ${date.year}';
 }
 
+/// When a chat message was sent, in words a reader does not have to decode:
+/// "2:14 PM" for today, "Yesterday 2:14 PM", then "12 Mar, 2:14 PM" with the
+/// year appended once it differs.
+String chatTimestamp(DateTime when) {
+  final hour = when.hour % 12 == 0 ? 12 : when.hour % 12;
+  final minute = when.minute.toString().padLeft(2, '0');
+  final time = '$hour:$minute ${when.hour < 12 ? 'AM' : 'PM'}';
+
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(when.year, when.month, when.day);
+  if (day == today) {
+    return time;
+  }
+  if (day == today.subtract(const Duration(days: 1))) {
+    return 'Yesterday $time';
+  }
+  return '${formatDate(when)}, $time';
+}
+
 /// Relative time for note timestamps.
 String formatRelative(DateTime time) {
   final diff = DateTime.now().difference(time);
@@ -1433,6 +1460,10 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
   String? _error;
   RealtimeChannel? _channel;
 
+  /// When each member last had this chat open, for the "Seen by" line.
+  Map<String, DateTime> _reads = {};
+  RealtimeChannel? _readsChannel;
+
   /// Set while replying, so the composer posts into that thread.
   TaskComment? _replyingTo;
 
@@ -1460,7 +1491,59 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
         }
       },
     );
+    _loadReads();
+    _readsChannel = widget.repository.subscribeToChatReads(
+      taskId: widget.task.id,
+      onChange: () {
+        if (mounted) {
+          _loadReads();
+        }
+      },
+    );
     _composer.addListener(_updateMentionMatches);
+  }
+
+  /// Read receipts are decoration on the conversation — any failure here
+  /// stays silent rather than getting between people and their messages.
+  Future<void> _loadReads() async {
+    try {
+      final reads = await widget.repository.chatReads(widget.task.id);
+      if (mounted) {
+        setState(() => _reads = reads);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _markRead() async {
+    try {
+      await widget.repository.markChatRead(widget.task.id);
+    } catch (_) {}
+  }
+
+  /// Teammates (other than the newest message's author) whose last visit is
+  /// at or past the newest message — the "everyone has seen this" answer.
+  List<String> get _seenByNames {
+    if (_comments.isEmpty) {
+      return const [];
+    }
+    var last = _comments.first;
+    for (final comment in _comments) {
+      if (comment.createdAt.isAfter(last.createdAt)) {
+        last = comment;
+      }
+    }
+    final names = <String>[];
+    for (final member in widget.members) {
+      final id = member.profile.id;
+      if (id == widget.currentUserId || id == last.author?.id) {
+        continue;
+      }
+      final at = _reads[id];
+      if (at != null && !at.isBefore(last.createdAt)) {
+        names.add(member.profile.displayName);
+      }
+    }
+    return names;
   }
 
   @override
@@ -1471,6 +1554,10 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
     final channel = _channel;
     if (channel != null) {
       widget.repository.unsubscribe(channel);
+    }
+    final readsChannel = _readsChannel;
+    if (readsChannel != null) {
+      widget.repository.unsubscribe(readsChannel);
     }
     super.dispose();
   }
@@ -1487,6 +1574,9 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
         _loading = false;
         _error = null;
       });
+      // Having the chat open means having read it — on arrival and again for
+      // every message that lands while it stays open.
+      unawaited(_markRead());
       // Only follow the conversation if they were already at the end. Yanking
       // someone away from what they were reading is worse than a missed line.
       if (wasAtBottom) {
@@ -1691,17 +1781,72 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
   }
 
   Future<void> _react(TaskComment comment, String emoji) async {
-    final mine = comment.myReactions.contains(emoji);
+    final add = !comment.myReactions.contains(emoji);
+    // Optimistic: the chip flips the moment it is clicked. The old flow
+    // waited for the server and then reloaded the whole conversation, so a
+    // reaction landed a beat late and the list visibly churned — which read
+    // as "reactions are buggy". The realtime echo still reconciles this
+    // against the server's truth moments later.
+    _applyReactionLocally(comment.id, emoji, add: add);
     try {
       await widget.repository.toggleCommentReaction(
         commentId: comment.id,
         emoji: emoji,
-        add: !mine,
+        add: add,
       );
-      await _load();
     } catch (_) {
-      // A reaction failing is not worth interrupting the conversation over.
+      // Rolled back rather than surfaced: a reaction failing is not worth
+      // interrupting the conversation over, but the chip must not lie.
+      _applyReactionLocally(comment.id, emoji, add: !add);
     }
+  }
+
+  void _applyReactionLocally(
+    String commentId,
+    String emoji, {
+    required bool add,
+  }) {
+    TaskComment update(TaskComment comment) {
+      if (comment.id != commentId) {
+        if (comment.replies.isEmpty) {
+          return comment;
+        }
+        return comment.copyWith(
+          replies: [for (final reply in comment.replies) update(reply)],
+        );
+      }
+      final mine = Set<String>.from(comment.myReactions);
+      final counts = Map<String, int>.from(comment.reactions);
+      final users = {
+        for (final entry in comment.reactionUsers.entries)
+          entry.key: List<String>.from(entry.value),
+      };
+      final me = widget.currentUserId;
+      if (add && !mine.contains(emoji)) {
+        mine.add(emoji);
+        counts[emoji] = (counts[emoji] ?? 0) + 1;
+        users.putIfAbsent(emoji, () => []).add(me);
+      } else if (!add && mine.contains(emoji)) {
+        mine.remove(emoji);
+        final remaining = (counts[emoji] ?? 1) - 1;
+        if (remaining <= 0) {
+          counts.remove(emoji);
+          users.remove(emoji);
+        } else {
+          counts[emoji] = remaining;
+          users[emoji]?.remove(me);
+        }
+      }
+      return comment.copyWith(
+        reactions: counts,
+        myReactions: mine,
+        reactionUsers: users,
+      );
+    }
+
+    setState(() {
+      _comments = [for (final comment in _comments) update(comment)];
+    });
   }
 
   String _readable(Object error) =>
@@ -1752,58 +1897,113 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
                       // Bottom, so a short conversation grows up out of the
                       // composer instead of hanging from the header.
                       alignment: Alignment.bottomCenter,
-                      child: ListView.builder(
-                        controller: _scroll,
-                        padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
-                        // Messages stack up from the composer, the way every
-                        // chat does. Without this a conversation with two
-                        // messages in it pinned them to the top of the panel
-                        // with a field of empty white beneath, as far from the
-                        // box you type in as the layout allowed.
-                        //
-                        // This only affects the short case: once the messages
-                        // are taller than the viewport the alignment has nothing
-                        // left to give and the list scrolls normally.
-                        //
-                        // shrinkWrap lets the viewport size to its content so
-                        // there is slack for the alignment to consume; without
-                        // it the list always claims the full height and sits at
-                        // the top regardless.
-                        shrinkWrap: true,
-                        itemCount: timeline.length,
-                        itemBuilder: (context, index) {
-                          final entry = timeline[index];
-                          final comment = entry.comment;
-                          // A run by one person shows their name once. Three
-                          // identical bylines in a column was the list telling
-                          // you what you could already see. A reply always
-                          // breaks the run, because it carries a quote above it.
-                          final previous = index > 0
-                              ? timeline[index - 1]
-                              : null;
-                          return _MessageBubble(
-                            comment: comment,
-                            replyingTo: entry.parent,
-                            grouped:
-                                entry.parent == null &&
-                                previous != null &&
-                                previous.comment.author?.id ==
-                                    comment.author?.id,
-                            members: widget.members,
-                            currentUserId: widget.currentUserId,
-                            // Replies stay one deep: you answer the message,
-                            // not the answer.
-                            onReply: entry.parent == null
-                                ? () => _startReply(comment)
-                                : null,
-                            onEdit: () => _startEditing(comment),
-                            onDelete: () => _delete(comment),
-                            onReact: (emoji) => _react(comment, emoji),
-                          );
-                        },
+                      // SelectionArea rather than per-message SelectableText:
+                      // it lets a drag sweep across several messages and copy
+                      // them together, and it leaves the link spans inside
+                      // free to take taps.
+                      child: SelectionArea(
+                        child: ListView.builder(
+                          controller: _scroll,
+                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                          // Messages stack up from the composer, the way every
+                          // chat does. Without this a conversation with two
+                          // messages in it pinned them to the top of the panel
+                          // with a field of empty white beneath, as far from the
+                          // box you type in as the layout allowed.
+                          //
+                          // This only affects the short case: once the messages
+                          // are taller than the viewport the alignment has nothing
+                          // left to give and the list scrolls normally.
+                          //
+                          // shrinkWrap lets the viewport size to its content so
+                          // there is slack for the alignment to consume; without
+                          // it the list always claims the full height and sits at
+                          // the top regardless.
+                          shrinkWrap: true,
+                          itemCount: timeline.length,
+                          itemBuilder: (context, index) {
+                            final entry = timeline[index];
+                            final comment = entry.comment;
+                            // A run by one person shows their name once. Three
+                            // identical bylines in a column was the list telling
+                            // you what you could already see. A reply always
+                            // breaks the run, because it carries a quote above it.
+                            final previous = index > 0
+                                ? timeline[index - 1]
+                                : null;
+                            // Messenger-style: the date and time stand between
+                            // messages as a centred divider whenever the
+                            // conversation pauses, rather than cluttering every
+                            // byline. A divider also breaks the author run.
+                            final timeBreak =
+                                previous == null ||
+                                comment.createdAt
+                                        .difference(previous.comment.createdAt)
+                                        .inMinutes >=
+                                    20;
+                            final bubble = _MessageBubble(
+                              comment: comment,
+                              replyingTo: entry.parent,
+                              grouped:
+                                  !timeBreak &&
+                                  entry.parent == null &&
+                                  previous.comment.author?.id ==
+                                      comment.author?.id,
+                              members: widget.members,
+                              currentUserId: widget.currentUserId,
+                              // Replies stay one deep: you answer the message,
+                              // not the answer.
+                              onReply: entry.parent == null
+                                  ? () => _startReply(comment)
+                                  : null,
+                              onEdit: () => _startEditing(comment),
+                              onDelete: () => _delete(comment),
+                              onReact: (emoji) => _react(comment, emoji),
+                            );
+                            if (!timeBreak) {
+                              return bubble;
+                            }
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                _TimeDivider(comment.createdAt),
+                                bubble,
+                              ],
+                            );
+                          },
+                        ),
                       ),
                     ),
             ),
+            // "Seen by" sits under the newest message, where every messenger
+            // puts it. Only teammates who are caught up are named; an empty
+            // line would just be noise.
+            if (_seenByNames.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 0, 18, 5),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    const Icon(
+                      Icons.done_all_rounded,
+                      size: 12,
+                      color: plannerFaint,
+                    ),
+                    const SizedBox(width: 4),
+                    Flexible(
+                      child: Text(
+                        'Seen by ${_seenByNames.join(', ')}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerFaint,
+                          fontSize: 10.5,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             if (_mentionMatches.isNotEmpty || _showEveryone)
               _MentionSuggestions(
                 matches: _mentionMatches,
@@ -1825,6 +2025,32 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
                 onCancel: _cancelComposerMode,
               ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The centred "Yesterday 2:14 PM" strip between messages, marking where the
+/// conversation paused — the way Messenger dates a thread.
+class _TimeDivider extends StatelessWidget {
+  const _TimeDivider(this.when);
+
+  final DateTime when;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 16, bottom: 2),
+      child: Center(
+        child: Text(
+          chatTimestamp(when),
+          style: const TextStyle(
+            color: plannerFaint,
+            fontSize: 10.5,
+            fontWeight: FontWeight.w600,
+            letterSpacing: 0.2,
+          ),
         ),
       ),
     );
@@ -2144,6 +2370,20 @@ class _MessageBubbleState extends State<_MessageBubble> {
   bool get _mentionsMe =>
       widget.comment.mentionedIds.contains(widget.currentUserId);
 
+  /// Copies the message text, with feedback — a silent copy is
+  /// indistinguishable from a click that did nothing.
+  void _copyBody(BuildContext context) {
+    Clipboard.setData(ClipboardData(text: widget.comment.body));
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Message copied'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     final comment = widget.comment;
@@ -2178,7 +2418,11 @@ class _MessageBubbleState extends State<_MessageBubble> {
                   currentUserId: widget.currentUserId,
                 ),
               ),
-            if (!widget.grouped)
+            // The byline carries only the name now — the when lives in the
+            // centred time dividers and on each bubble's hover, the way
+            // Messenger does it. Your own messages need no byline at all
+            // unless they were edited.
+            if (!widget.grouped && (!_isMine || comment.wasEdited))
               Padding(
                 // Indented past the avatar column so the name sits over the
                 // bubble it belongs to.
@@ -2190,7 +2434,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (!_isMine) ...[
+                    if (!_isMine)
                       Text(
                         author?.displayName ?? 'Someone',
                         style: const TextStyle(
@@ -2199,17 +2443,8 @@ class _MessageBubbleState extends State<_MessageBubble> {
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(width: 6),
-                    ],
-                    Text(
-                      comment.age,
-                      style: const TextStyle(
-                        color: plannerFaint,
-                        fontSize: 10.5,
-                      ),
-                    ),
                     if (comment.wasEdited) ...[
-                      const SizedBox(width: 5),
+                      if (!_isMine) const SizedBox(width: 5),
                       const Text(
                         'edited',
                         style: TextStyle(
@@ -2252,18 +2487,30 @@ class _MessageBubbleState extends State<_MessageBubble> {
                     isMine: true,
                     canReply: widget.onReply != null,
                     onReply: widget.onReply,
+                    onCopy: () => _copyBody(context),
                     onEdit: widget.onEdit,
                     onDelete: widget.onDelete,
                     onReact: widget.onReact,
                   ),
                 Flexible(
-                  child: _Bubble(
-                    comment: comment,
-                    members: widget.members,
-                    currentUserId: widget.currentUserId,
-                    isMine: _isMine,
-                    mentionsMe: _mentionsMe,
-                    onReact: widget.onReact,
+                  // Every bubble answers "when exactly?" on hover — grouped
+                  // messages have no byline of their own to say it. And a
+                  // right-click copies the text, for anyone who tries it
+                  // before finding the hover button.
+                  child: GestureDetector(
+                    onSecondaryTap: () => _copyBody(context),
+                    child: Tooltip(
+                      message: chatTimestamp(comment.createdAt),
+                      waitDuration: const Duration(milliseconds: 600),
+                      child: _Bubble(
+                        comment: comment,
+                        members: widget.members,
+                        currentUserId: widget.currentUserId,
+                        isMine: _isMine,
+                        mentionsMe: _mentionsMe,
+                        onReact: widget.onReact,
+                      ),
+                    ),
                   ),
                 ),
                 if (!_isMine)
@@ -2272,6 +2519,7 @@ class _MessageBubbleState extends State<_MessageBubble> {
                     isMine: false,
                     canReply: widget.onReply != null,
                     onReply: widget.onReply,
+                    onCopy: () => _copyBody(context),
                     onEdit: widget.onEdit,
                     onDelete: widget.onDelete,
                     onReact: widget.onReact,
@@ -2446,6 +2694,9 @@ class _Bubble extends StatelessWidget {
             child: _ReactionChips(
               reactions: comment.reactions,
               mine: comment.myReactions,
+              users: comment.reactionUsers,
+              members: members,
+              currentUserId: currentUserId,
               onToggle: onReact,
             ),
           ),
@@ -2461,6 +2712,7 @@ class _HoverActions extends StatelessWidget {
     required this.isMine,
     required this.canReply,
     required this.onReply,
+    required this.onCopy,
     required this.onEdit,
     required this.onDelete,
     required this.onReact,
@@ -2470,6 +2722,7 @@ class _HoverActions extends StatelessWidget {
   final bool isMine;
   final bool canReply;
   final VoidCallback? onReply;
+  final VoidCallback onCopy;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final ValueChanged<String> onReact;
@@ -2489,6 +2742,7 @@ class _HoverActions extends StatelessWidget {
             isMine: isMine,
             canReply: canReply,
             onReply: onReply,
+            onCopy: onCopy,
             onEdit: onEdit,
             onDelete: onDelete,
             onReact: onReact,
@@ -2518,8 +2772,14 @@ class _UnknownAvatar extends StatelessWidget {
   }
 }
 
-/// The message text, with @names picked out.
-class _MessageBody extends StatelessWidget {
+/// The message text, with @names picked out and links made clickable.
+///
+/// Stateful because link spans carry gesture recognizers, which have to be
+/// disposed — and plain [Text.rich] rather than SelectableText, because
+/// SelectableText swallows span taps. Selection comes from the
+/// [SelectionArea] wrapped around the whole timeline instead, which also
+/// lets a copy sweep across messages.
+class _MessageBody extends StatefulWidget {
   const _MessageBody({
     required this.body,
     required this.members,
@@ -2538,23 +2798,160 @@ class _MessageBody extends StatelessWidget {
   final Color? mentionColor;
 
   @override
+  State<_MessageBody> createState() => _MessageBodyState();
+}
+
+class _MessageBodyState extends State<_MessageBody> {
+  final List<TapGestureRecognizer> _linkTaps = [];
+
+  static final RegExp _linkPattern = RegExp(
+    r'(https?://|www\.)[^\s]+',
+    caseSensitive: false,
+  );
+
+  void _disposeRecognizers() {
+    for (final recognizer in _linkTaps) {
+      recognizer.dispose();
+    }
+    _linkTaps.clear();
+  }
+
+  @override
+  void dispose() {
+    _disposeRecognizers();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return SelectableText.rich(
+    _disposeRecognizers();
+    return Text.rich(
       TextSpan(
-        style: TextStyle(color: color, fontSize: 13, height: 1.45),
-        children: _spans(),
+        style: TextStyle(color: widget.color, fontSize: 13, height: 1.45),
+        children: _spans(context),
       ),
     );
   }
 
-  /// Splits the body around @names that match a real teammate, and @everyone.
+  /// Links first, then mentions within the text between them.
+  List<InlineSpan> _spans(BuildContext context) {
+    final body = widget.body;
+    final spans = <InlineSpan>[];
+    var index = 0;
+    for (final match in _linkPattern.allMatches(body)) {
+      // Trailing punctuation belongs to the sentence, not the address.
+      final url = match.group(0)!.replaceFirst(RegExp(r'[.,;:!?)\]]+$'), '');
+      if (url.isEmpty) {
+        continue;
+      }
+      if (match.start > index) {
+        spans.addAll(_mentionSpans(body.substring(index, match.start)));
+      }
+      final recognizer = TapGestureRecognizer()
+        ..onTap = () => _confirmOpenLink(context, url);
+      _linkTaps.add(recognizer);
+      spans.add(
+        TextSpan(
+          text: url,
+          recognizer: recognizer,
+          style: TextStyle(
+            color: widget.mentionColor ?? plannerBlue,
+            fontWeight: FontWeight.w600,
+            decoration: TextDecoration.underline,
+            decorationColor: widget.mentionColor ?? plannerBlue,
+          ),
+        ),
+      );
+      index = match.start + url.length;
+    }
+    if (index < body.length) {
+      spans.addAll(_mentionSpans(body.substring(index)));
+    }
+    return spans;
+  }
+
+  /// Names the destination and waits for a yes before leaving the app — a
+  /// pasted link in a chat is exactly where a misleading address would live.
+  Future<void> _confirmOpenLink(BuildContext context, String raw) async {
+    final normalized = raw.toLowerCase().startsWith('http')
+        ? raw
+        : 'https://$raw';
+    final uri = Uri.tryParse(normalized);
+    if (uri == null) {
+      return;
+    }
+
+    final open = await showDialog<bool>(
+      context: context,
+      builder: (context) => AppDialog(
+        icon: Icons.open_in_new_rounded,
+        title: 'Open this link?',
+        message: 'It opens outside Planner, in your default browser.',
+        content: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: plannerSurface,
+            borderRadius: BorderRadius.circular(radiusSm),
+            border: Border.all(color: plannerBorder),
+          ),
+          child: SelectableText(
+            normalized,
+            style: const TextStyle(
+              fontFamily: 'Consolas',
+              fontSize: 12,
+              height: 1.5,
+              color: plannerInk,
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Open link'),
+          ),
+        ],
+      ),
+    );
+    if (open != true || !context.mounted) {
+      return;
+    }
+
+    // Feedback that the click did something: the handoff to the browser can
+    // take a beat, and silence there reads as a dead link.
+    final host = uri.host.isEmpty ? normalized : uri.host;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text('Opening $host in your browser…')));
+
+    var launched = false;
+    try {
+      launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {}
+    if (!launched && context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            backgroundColor: plannerRed,
+            content: Text('Could not open that link.'),
+          ),
+        );
+    }
+  }
+
+  /// Splits [text] around @names that match a real teammate, and @everyone.
   ///
   /// Longest name first, so "@Ana" cannot claim the start of "@Ana Maria".
   /// @everyone is not a member, so it has to be added to the pattern by hand —
   /// without it the word rendered as plain text while every other mention was
   /// coloured, which read as the feature not working.
-  List<TextSpan> _spans() {
-    final names = members.map((m) => m.profile.displayName).toList()
+  List<TextSpan> _mentionSpans(String text) {
+    final names = widget.members.map((m) => m.profile.displayName).toList()
       ..sort((a, b) => b.length.compareTo(a.length));
 
     final alternatives = [...names.map(RegExp.escape), 'everyone'];
@@ -2565,17 +2962,17 @@ class _MessageBody extends StatelessWidget {
 
     final spans = <TextSpan>[];
     var index = 0;
-    for (final match in pattern.allMatches(body)) {
+    for (final match in pattern.allMatches(text)) {
       if (match.start > index) {
-        spans.add(TextSpan(text: body.substring(index, match.start)));
+        spans.add(TextSpan(text: text.substring(index, match.start)));
       }
       final name = match.group(1) ?? '';
       final isEveryone = name.toLowerCase() == 'everyone';
       final isMe =
           isEveryone ||
-          members.any(
+          widget.members.any(
             (m) =>
-                m.profile.id == currentUserId &&
+                m.profile.id == widget.currentUserId &&
                 m.profile.displayName.toLowerCase() == name.toLowerCase(),
           );
       spans.add(
@@ -2584,15 +2981,15 @@ class _MessageBody extends StatelessWidget {
           style: TextStyle(
             // @everyone includes you, so it gets the same colour as being
             // named directly.
-            color: mentionColor ?? (isMe ? plannerOrange : plannerBlue),
+            color: widget.mentionColor ?? (isMe ? plannerOrange : plannerBlue),
             fontWeight: FontWeight.w600,
           ),
         ),
       );
       index = match.end;
     }
-    if (index < body.length) {
-      spans.add(TextSpan(text: body.substring(index)));
+    if (index < text.length) {
+      spans.add(TextSpan(text: text.substring(index)));
     }
     return spans;
   }
@@ -2602,12 +2999,44 @@ class _ReactionChips extends StatelessWidget {
   const _ReactionChips({
     required this.reactions,
     required this.mine,
+    required this.users,
+    required this.members,
+    required this.currentUserId,
     required this.onToggle,
   });
 
   final Map<String, int> reactions;
   final Set<String> mine;
+  final Map<String, List<String>> users;
+  final List<WorkspaceMember> members;
+  final String currentUserId;
   final ValueChanged<String> onToggle;
+
+  /// "You and Ana reacted 👍" — the names behind a count, since a bare "2"
+  /// answers how many but never who.
+  String _whoReacted(String emoji) {
+    final ids = users[emoji] ?? const [];
+    final names = <String>[
+      for (final id in ids)
+        if (id == currentUserId)
+          'You'
+        else
+          members
+                  .where((m) => m.profile.id == id)
+                  .map((m) => m.profile.displayName)
+                  .firstOrNull ??
+              'Someone',
+    ];
+    // You first, the way every messenger words it.
+    names.sort((a, b) => (a == 'You' ? 0 : 1).compareTo(b == 'You' ? 0 : 1));
+    if (names.isEmpty) {
+      return 'React with $emoji';
+    }
+    final list = names.length <= 2
+        ? names.join(' and ')
+        : '${names.take(2).join(', ')} and ${names.length - 2} more';
+    return '$list reacted $emoji';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2616,11 +3045,15 @@ class _ReactionChips extends StatelessWidget {
       runSpacing: 5,
       children: [
         for (final entry in reactions.entries)
-          _ReactionChip(
-            emoji: entry.key,
-            count: entry.value,
-            isMine: mine.contains(entry.key),
-            onTap: () => onToggle(entry.key),
+          Tooltip(
+            message: _whoReacted(entry.key),
+            waitDuration: const Duration(milliseconds: 400),
+            child: _ReactionChip(
+              emoji: entry.key,
+              count: entry.value,
+              isMine: mine.contains(entry.key),
+              onTap: () => onToggle(entry.key),
+            ),
           ),
       ],
     );
@@ -2645,7 +3078,11 @@ class _ReactionChip extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(20),
-      child: Container(
+      // Animated, because the optimistic toggle makes the flip instant and a
+      // hard cut at that speed reads as flicker rather than response.
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
         decoration: BoxDecoration(
           color: isMine ? tint(plannerBlue, 0.12) : plannerSurface,
@@ -2695,6 +3132,7 @@ class _MessageActions extends StatelessWidget {
     required this.isMine,
     required this.canReply,
     required this.onReply,
+    required this.onCopy,
     required this.onEdit,
     required this.onDelete,
     required this.onReact,
@@ -2703,6 +3141,7 @@ class _MessageActions extends StatelessWidget {
   final bool isMine;
   final bool canReply;
   final VoidCallback? onReply;
+  final VoidCallback onCopy;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
   final ValueChanged<String> onReact;
@@ -2727,6 +3166,14 @@ class _MessageActions extends StatelessWidget {
               tooltip: 'Reply',
               onTap: onReply,
             ),
+          // A button, because drag-to-select and right-click both exist and
+          // neither is discoverable — nothing on screen said copying was
+          // possible at all.
+          _InlineAction(
+            icon: Icons.copy_rounded,
+            tooltip: 'Copy text',
+            onTap: onCopy,
+          ),
           // Only your own messages have anything left to hide.
           if (isMine) _OverflowAction(onEdit: onEdit, onDelete: onDelete),
         ],
@@ -2797,11 +3244,14 @@ class _ReactActionState extends State<_ReactAction> {
         ),
       ],
       builder: (context, anchor, child) {
-        return GestureDetector(
-          onTap: () => anchor.isOpen ? anchor.close() : anchor.open(),
-          child: const _ActionIcon(
-            icon: Icons.add_reaction_outlined,
-            tooltip: 'React',
+        return MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: GestureDetector(
+            onTap: () => anchor.isOpen ? anchor.close() : anchor.open(),
+            child: const _ActionIcon(
+              icon: Icons.add_reaction_outlined,
+              tooltip: 'React',
+            ),
           ),
         );
       },
@@ -2871,31 +3321,23 @@ class _InlineAction extends StatefulWidget {
 }
 
 class _InlineActionState extends State<_InlineAction> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
+    // Same reasoning as the emoji picker: InkWell's synchronous hover cannot
+    // highlight the wrong button, and it carries the pointer cursor.
     return Tooltip(
       message: widget.tooltip,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        onEnter: (_) => setHoverSafely(this, () => _hovered = true),
-        onExit: (_) => setHoverSafely(this, () => _hovered = false),
-        child: GestureDetector(
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(radiusXs),
+        child: InkWell(
           onTap: widget.onTap,
-          child: Container(
+          borderRadius: BorderRadius.circular(radiusXs),
+          hoverColor: plannerHover,
+          child: SizedBox(
             width: 26,
             height: 22,
-            decoration: BoxDecoration(
-              color: _hovered ? plannerHover : Colors.transparent,
-              borderRadius: BorderRadius.circular(radiusXs),
-            ),
-            alignment: Alignment.center,
-            child: Icon(
-              widget.icon,
-              size: 14,
-              color: _hovered ? plannerText : plannerMuted,
-            ),
+            child: Icon(widget.icon, size: 14, color: plannerMuted),
           ),
         ),
       ),
@@ -2953,39 +3395,38 @@ class _ReactionPickerButton extends StatefulWidget {
 }
 
 class _ReactionPickerButtonState extends State<_ReactionPickerButton> {
-  bool _hovered = false;
-
   @override
   Widget build(BuildContext context) {
-    return MouseRegion(
-      cursor: SystemMouseCursors.click,
-      onEnter: (_) => setHoverSafely(this, () => _hovered = true),
-      onExit: (_) => setHoverSafely(this, () => _hovered = false),
-      child: GestureDetector(
-        onTap: widget.onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 110),
-          width: 34,
-          height: 34,
-          margin: const EdgeInsets.symmetric(horizontal: 1),
-          decoration: BoxDecoration(
-            // A tinted disc rather than a grey square: plannerHover is close
-            // enough to the menu's own white that the highlight barely read.
-            color: _hovered ? tint(plannerBlue, 0.12) : Colors.transparent,
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            widget.emoji,
-            // Grows slightly under the pointer, which is the whole feedback a
-            // one-tap control needs.
-            style: TextStyle(
-              fontSize: _hovered ? 20 : 18,
-              // Named explicitly. The default face has no glyphs for the
-              // variation-selector sequences (❤️) or the newer codepoints, so
-              // they came out as broken multi-colour boxes.
-              fontFamily: emojiFontFamily,
-              fontFamilyFallback: emojiFontFallback,
+    // InkWell rather than a hand-rolled MouseRegion: Material tracks hover
+    // synchronously, so the tinted disc can never land on a neighbouring
+    // emoji the way the deferred-setState version did — and the pointer
+    // cursor comes with it.
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 1),
+      child: Material(
+        color: Colors.transparent,
+        shape: const CircleBorder(),
+        child: InkWell(
+          onTap: widget.onTap,
+          customBorder: const CircleBorder(),
+          // A tinted disc rather than a grey square: plannerHover is close
+          // enough to the menu's own white that the highlight barely read.
+          hoverColor: tint(plannerBlue, 0.12),
+          child: SizedBox(
+            width: 34,
+            height: 34,
+            child: Center(
+              child: Text(
+                widget.emoji,
+                style: const TextStyle(
+                  fontSize: 19,
+                  // Named explicitly. The default face has no glyphs for the
+                  // variation-selector sequences (❤️) or the newer
+                  // codepoints, so they came out as broken boxes.
+                  fontFamily: emojiFontFamily,
+                  fontFamilyFallback: emojiFontFallback,
+                ),
+              ),
             ),
           ),
         ),
@@ -3565,56 +4006,56 @@ class ChatButton extends StatelessWidget {
     final count = task.commentCount;
     final hasMessages = count > 0;
 
+    // A bordered pill rather than a bare grey glyph: on a card full of text
+    // the old icon disappeared, and a chat nobody can find is a chat nobody
+    // uses. With messages it turns blue and carries the count — the "someone
+    // said something here" signal readable from across the board.
     return Tooltip(
       message: hasMessages
-          ? '$count ${count == 1 ? 'message' : 'messages'}'
+          ? '$count ${count == 1 ? 'message' : 'messages'} — open chat'
           : 'Open chat',
-      child: InkWell(
-        onTap: () => onOpenChat(task),
-        borderRadius: BorderRadius.circular(radiusSm),
-        child: SizedBox(
-          width: size,
-          height: size,
-          child: Stack(
-            clipBehavior: Clip.none,
-            alignment: Alignment.center,
-            children: [
-              Icon(
-                hasMessages
-                    ? Icons.forum_rounded
-                    : Icons.chat_bubble_outline_rounded,
-                size: 15,
-                color: hasMessages ? plannerBlue : plannerFaint,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onOpenChat(task),
+          borderRadius: BorderRadius.circular(99),
+          child: Container(
+            height: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+            decoration: BoxDecoration(
+              color: hasMessages ? tint(plannerBlue, 0.10) : Colors.transparent,
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(
+                color: hasMessages ? tint(plannerBlue, 0.40) : plannerBorder,
               ),
-              // Shown from the first message, not the second: one message is
-              // still a conversation, and a lone icon said nothing about
-              // whether anyone had spoken.
-              if (count > 0)
-                Positioned(
-                  right: -7,
-                  top: -5,
-                  child: Container(
-                    constraints: const BoxConstraints(minWidth: 15),
-                    height: 15,
-                    padding: const EdgeInsets.symmetric(horizontal: 3.5),
-                    decoration: BoxDecoration(
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  hasMessages
+                      ? Icons.forum_rounded
+                      : Icons.chat_bubble_outline_rounded,
+                  size: 13,
+                  color: hasMessages ? plannerBlue : plannerMuted,
+                ),
+                // Shown from the first message, not the second: one message is
+                // still a conversation, and a lone icon said nothing about
+                // whether anyone had spoken.
+                if (hasMessages) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    compactCount(count),
+                    style: const TextStyle(
                       color: plannerBlue,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.white, width: 1.5),
-                    ),
-                    alignment: Alignment.center,
-                    child: Text(
-                      compactCount(count),
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 8.5,
-                        fontWeight: FontWeight.w700,
-                        height: 1,
-                      ),
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
                     ),
                   ),
-                ),
-            ],
+                ],
+              ],
+            ),
           ),
         ),
       ),

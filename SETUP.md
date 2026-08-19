@@ -96,9 +96,28 @@ version tag. Add `SUPABASE_URL` and `SUPABASE_ANON_KEY` under
 **Repository Settings -> Secrets and variables -> Actions**, then push a tag
 such as `v1.0.0`. The resulting GitHub Release contains:
 
-- `PlannerSetup-1.0.0.exe` — installer with Start Menu, optional desktop
+- `PlannerSetup-<version>.exe` — installer with Start Menu, optional desktop
   shortcut, uninstall support, and the `planner://` URL scheme.
-- `Planner-Portable-1.0.0.zip` — unpack and run `planner.exe`.
+- `Planner-Portable-<version>.zip` — unpack and run `planner.exe`.
+
+The version everywhere — in the executable, the installer and the file names —
+comes from the tag, so `v1.2.0` produces `PlannerSetup-1.2.0.exe`. The
+`version:` field in `pubspec.yaml` only matters for local builds.
+
+### Auto-update
+
+On startup, Windows release builds ask the GitHub API for the latest release
+of this repository. When its tag is newer than the running version, the app
+offers to update; accepting downloads `PlannerSetup-<version>.exe` to the temp
+folder and runs it silently, which closes the app, installs over it and
+relaunches it. Declining just continues into the app — the offer returns on
+the next launch.
+
+For this to work the repository must stay public (the check is an
+unauthenticated `releases/latest` call) and releases must be cut by tagging,
+so the executable's version and the tag agree. Debug builds never check.
+Portable-ZIP users get the same offer; accepting converts them to an
+installed copy rather than updating the unpacked folder in place.
 
 > **Which key?** Use the **anon / publishable** key. It is meant to ship inside
 > a client app — row level security is what actually protects your data.

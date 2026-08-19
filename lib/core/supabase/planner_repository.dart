@@ -461,6 +461,24 @@ class PlannerRepository {
     return result.whereType<Map<String, dynamic>>().map(Board.fromMap).toList();
   }
 
+  /// One board with its groups and tasks, or null when it is gone or no
+  /// longer visible to this user.
+  ///
+  /// The refresh path. [loadBoards] returns the whole workspace, which is
+  /// right on arrival and wrong afterwards: a teammate moving one task made
+  /// every other client re-fetch every board. This fetches only what changed,
+  /// so the cost of an edit stops scaling with the size of the workspace.
+  Future<Board?> loadBoard(String boardId) async {
+    final result = await _client.rpc<dynamic>(
+      'board_tree_one',
+      params: {'target_board': boardId},
+    );
+    if (result is! Map<String, dynamic>) {
+      return null;
+    }
+    return Board.fromMap(result);
+  }
+
   Future<String> createBoard({
     required String workspaceId,
     required String name,
@@ -1206,6 +1224,7 @@ class PlannerRepository {
             : null,
         reactions: reactions[id]?.counts ?? const {},
         myReactions: reactions[id]?.mine ?? const {},
+        reactionUsers: reactions[id]?.users ?? const {},
         mentionedIds: mentions[id] ?? const [],
         replies: replies,
       );
@@ -1247,6 +1266,7 @@ class PlannerRepository {
       final emoji = row['emoji'] as String;
       final summary = summaries.putIfAbsent(id, _ReactionSummary.new);
       summary.counts[emoji] = (summary.counts[emoji] ?? 0) + 1;
+      summary.users.putIfAbsent(emoji, () => []).add(row['user_id'] as String);
       if (row['user_id'] == me) {
         summary.mine.add(emoji);
       }
@@ -1475,17 +1495,36 @@ class PlannerRepository {
   /// Coarse by design: correctness first, refinement later.
   RealtimeChannel subscribeToChanges({
     required String workspaceId,
-    required VoidCallback onChange,
+
+    /// Called with the board a change touched, or null when the change is
+    /// wider than one board (a board added or removed) and the whole
+    /// workspace has to be re-read.
+    required void Function(String? boardId) onChange,
   }) {
     var channel = _client.channel('workspace:$workspaceId');
 
+    /// The board a changed row belongs to. Both images are checked: a delete
+    /// carries only `oldRecord`, and a task moved between boards has to
+    /// invalidate the one it left as well as the one it joined.
+    String? boardOf(PostgresChangePayload payload) {
+      final updated = payload.newRecord['board_id'];
+      if (updated is String) {
+        return updated;
+      }
+      final previous = payload.oldRecord['board_id'];
+      return previous is String ? previous : null;
+    }
+
     // Board content, filtered server-side to this workspace so a busy
     // neighbouring team costs nothing.
+    //
+    // task_comments is deliberately absent. Posting a message updates
+    // tasks.comment_count through a trigger, so the tasks subscription
+    // already reports it — listening to both meant every chat message
+    // refreshed the board twice.
     for (final table in const [
       'tasks',
       'task_groups',
-      'boards',
-      'task_comments',
       'task_assignees',
       'task_column_values',
     ]) {
@@ -1498,17 +1537,32 @@ class PlannerRepository {
           column: 'workspace_id',
           value: workspaceId,
         ),
-        callback: (_) => onChange(),
+        callback: (payload) => onChange(boardOf(payload)),
       );
     }
 
+    // A board row changing can mean one added, removed, renamed or reordered,
+    // which the list itself has to absorb — so this asks for the full reload.
+    channel = channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'boards',
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'workspace_id',
+        value: workspaceId,
+      ),
+      callback: (_) => onChange(null),
+    );
+
     // Status labels carry board_id, not workspace_id, so they cannot be
-    // filtered the same way. Low traffic — a reload sorts it out.
+    // filtered to this workspace — but the payload still names the board, so
+    // a label change only refreshes that one.
     channel = channel.onPostgresChanges(
       event: PostgresChangeEvent.all,
       schema: 'public',
       table: 'board_status_labels',
-      callback: (_) => onChange(),
+      callback: (payload) => onChange(boardOf(payload)),
     );
 
     return channel.subscribe();
@@ -1578,13 +1632,66 @@ class PlannerRepository {
           ),
           callback: (_) => onChange(),
         )
-        // Reactions carry comment_id, not task_id, so they cannot be filtered
-        // to this task. Reaction traffic is low enough that the extra fetches
-        // do not matter.
+        // Filtered on the denormalised task_id added in 0010. Before that the
+        // subscription was unfiltered, so every reaction anywhere in the
+        // database reloaded every open chat.
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'task_comment_reactions',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'task_id',
+            value: taskId,
+          ),
+          callback: (_) => onChange(),
+        )
+        .subscribe();
+  }
+
+  /// When each member last had this task's chat open, keyed by user id.
+  ///
+  /// Read receipts: the chat compares these stamps against the newest
+  /// message's created_at to say who has seen it.
+  Future<Map<String, DateTime>> chatReads(String taskId) async {
+    final rows = await _client
+        .from('task_chat_reads')
+        .select('user_id, last_read_at')
+        .eq('task_id', taskId);
+    final reads = <String, DateTime>{};
+    for (final row in rows as List) {
+      final map = row as Map<String, dynamic>;
+      final at = DateTime.tryParse((map['last_read_at'] ?? '') as String);
+      if (at != null) {
+        reads[map['user_id'] as String] = at;
+      }
+    }
+    return reads;
+  }
+
+  /// Stamps "I have this chat open right now". The server records the time
+  /// itself, so clock skew between teammates cannot invent unread messages.
+  Future<void> markChatRead(String taskId) async {
+    await _client.rpc<void>('mark_chat_read', params: {'p_task': taskId});
+  }
+
+  /// Watches one task's read receipts, so "Seen" appears the moment a
+  /// teammate opens the chat.
+  RealtimeChannel subscribeToChatReads({
+    required String taskId,
+    required VoidCallback onChange,
+  }) {
+    return _client
+        .channel('task-chat-reads:$taskId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'task_chat_reads',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'task_id',
+            value: taskId,
+          ),
           callback: (_) => onChange(),
         )
         .subscribe();
@@ -1593,26 +1700,39 @@ class PlannerRepository {
   /// Watches for invitations addressed to the signed-in user, so the navbar
   /// bell appears without a restart.
   ///
-  /// Not filtered server-side: the filter would have to match on email, and RLS
-  /// already limits what this user can see. The callback triggers a reload,
-  /// which returns only their own invites.
+  /// Membership is filtered to this user server-side. Invitations cannot be —
+  /// they are addressed by email, and the row carries no user_id until it is
+  /// accepted — so that half stays broad and RLS decides what is readable.
+  /// The callback only triggers a reload, which returns their own invites.
   RealtimeChannel subscribeToMyInvites({required VoidCallback onChange}) {
-    return _client
+    final userId = _uid;
+    var channel = _client
         .channel('my-invites')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
           table: 'workspace_invites',
           callback: (_) => onChange(),
-        )
-        // Being added to a workspace by an admin, or removed from one.
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'workspace_members',
-          callback: (_) => onChange(),
-        )
-        .subscribe();
+        );
+
+    // Being added to a workspace by an admin, or removed from one. Filtered:
+    // without this, every membership change anywhere in the database woke
+    // every signed-in client.
+    channel = channel.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'workspace_members',
+      filter: userId == null
+          ? null
+          : PostgresChangeFilter(
+              type: PostgresChangeFilterType.eq,
+              column: 'user_id',
+              value: userId,
+            ),
+      callback: (_) => onChange(),
+    );
+
+    return channel.subscribe();
   }
 
   Future<void> unsubscribe(RealtimeChannel channel) async {
@@ -1666,6 +1786,9 @@ class PlannerRepository {
 class _ReactionSummary {
   final Map<String, int> counts = {};
   final Set<String> mine = {};
+
+  /// Emoji → who used it, so the chip can name its people.
+  final Map<String, List<String>> users = {};
 }
 
 /// Postgres `date` columns want a bare calendar date, not an ISO timestamp.

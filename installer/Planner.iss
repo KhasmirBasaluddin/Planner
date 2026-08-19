@@ -6,7 +6,13 @@
 ; because a blank publisher field is itself a red flag.
 
 #define MyAppName "Planner"
-#define MyAppVersion "1.0.0"
+; CI overrides this with the git tag via `iscc /DMyAppVersion=x.y.z`; the
+; fallback only covers local builds. The in-app updater compares this version
+; against the latest GitHub release, so a release built with the fallback
+; would never be offered as an update.
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.1"
+#endif
 #define MyAppPublisher "Vintazk"
 #define MyAppURL "https://vintazk.com"
 #define MyAppExeName "planner.exe"
@@ -65,4 +71,7 @@ Root: HKA; Subkey: "Software\Classes\planner\DefaultIcon"; ValueType: string; Va
 Root: HKA; Subkey: "Software\Classes\planner\shell\open\command"; ValueType: string; ValueData: """{app}\{#MyAppExeName}"" ""%1"""
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall skipifsilent
+; No skipifsilent: the in-app updater runs this installer with /SILENT, and
+; the relaunch here is what brings the app back after it was closed for the
+; update.
+Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName}"; Flags: nowait postinstall

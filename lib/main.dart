@@ -1,7 +1,11 @@
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/constants.dart';
+import 'core/notifications/desktop_toast.dart';
 import 'core/supabase/auth_service.dart';
 import 'core/supabase/planner_repository.dart';
 import 'core/supabase/supabase_config.dart';
@@ -9,12 +13,16 @@ import 'core/theme.dart';
 import 'features/auth/login_page.dart';
 import 'features/planner/planner_page.dart';
 import 'shared/utils/planner_colors.dart';
+import 'shared/widgets/update_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Makes confirmation links work for both installed and portable ZIP builds.
   await ensureWindowsProtocolRegistration();
+
+  // Native toasts for urgent notifications; a no-op wherever unsupported.
+  await DesktopToast.init();
 
   // Credentials come from the gitignored .env file (or --dart-define in CI).
   await SupabaseConfig.load();
@@ -111,6 +119,17 @@ class _AuthGateState extends State<_AuthGate> with WidgetsBindingObserver {
         }
       };
     _deepLinks.start();
+
+    // Offer any newer GitHub release once the first frame is up, so the
+    // dialog has a navigator to attach to. Debug builds skip it: the check
+    // would nag developers whose local version trails the published one.
+    if (!kDebugMode && Platform.isWindows) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          promptForUpdateIfAvailable(context);
+        }
+      });
+    }
   }
 
   /// Honours "stay signed in": when it was unchecked, the session is dropped as

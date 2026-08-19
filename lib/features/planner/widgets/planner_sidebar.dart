@@ -5,10 +5,12 @@ import '../../../shared/utils/planner_colors.dart';
 import '../../../shared/utils/text_rules.dart';
 
 /// The left rail: workspace switcher at the top, boards in the middle, account
-/// controls at the bottom. Collapses to icons on narrow windows.
+/// controls at the bottom. Collapses to icons on narrow windows, or on demand
+/// through the collapse toggle when the window is wide enough to offer one.
 class PlannerSidebar extends StatefulWidget {
   const PlannerSidebar({
     super.key,
+    this.onToggleCompact,
     required this.workspaces,
     required this.selectedWorkspaceIndex,
     required this.boards,
@@ -41,6 +43,11 @@ class PlannerSidebar extends StatefulWidget {
   /// "No boards yet", which reads as a wrong answer rather than a pending one.
   final bool loading;
   final bool compact;
+
+  /// Flips the rail between full and icons-only. Null while a narrow window
+  /// forces compact anyway — a toggle that cannot expand would be a lie, so
+  /// the button is hidden instead.
+  final VoidCallback? onToggleCompact;
   final ValueChanged<int> onWorkspaceSelected;
   final VoidCallback onCreateWorkspace;
   final VoidCallback onJoinWorkspace;
@@ -151,21 +158,48 @@ class _PlannerSidebarState extends State<PlannerSidebar> {
                 padding: compact
                     ? const EdgeInsets.fromLTRB(14, 18, 14, 14)
                     : const EdgeInsets.fromLTRB(16, 18, 16, 14),
-                child: _WorkspaceSwitcher(
-                  workspace: _workspace,
-                  workspaces: workspaces,
-                  selectedIndex: selectedWorkspaceIndex,
-                  compact: compact,
-                  memberCount: members.length,
-                  onSelected: onWorkspaceSelected,
-                  onCreate: onCreateWorkspace,
-                  onJoin: onJoinWorkspace,
-                  onRename: onRenameWorkspace,
-                  onManageMembers: onManageMembers,
-                  onLeave: onLeaveWorkspace,
-                  onDelete: onDeleteWorkspace,
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: _WorkspaceSwitcher(
+                        workspace: _workspace,
+                        workspaces: workspaces,
+                        selectedIndex: selectedWorkspaceIndex,
+                        compact: compact,
+                        memberCount: members.length,
+                        onSelected: onWorkspaceSelected,
+                        onCreate: onCreateWorkspace,
+                        onJoin: onJoinWorkspace,
+                        onRename: onRenameWorkspace,
+                        onManageMembers: onManageMembers,
+                        onLeave: onLeaveWorkspace,
+                        onDelete: onDeleteWorkspace,
+                      ),
+                    ),
+                    if (!compact && widget.onToggleCompact != null) ...[
+                      const SizedBox(width: 4),
+                      _MiniIconButton(
+                        icon: Icons.keyboard_double_arrow_left_rounded,
+                        tooltip: 'Collapse sidebar',
+                        onPressed: widget.onToggleCompact!,
+                      ),
+                    ],
+                  ],
                 ),
               ),
+              // Collapsed, the header has no room beside the avatar, so the
+              // expand control gets its own row underneath.
+              if (compact && widget.onToggleCompact != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Center(
+                    child: _MiniIconButton(
+                      icon: Icons.keyboard_double_arrow_right_rounded,
+                      tooltip: 'Expand sidebar',
+                      onPressed: widget.onToggleCompact!,
+                    ),
+                  ),
+                ),
               Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
               // Until a workspace exists there is nowhere to put a board, so the
               // whole section is hidden rather than offering an action that

@@ -112,7 +112,9 @@ void main() {
 
     testWidgets('shows the message count when there is one', (tester) async {
       await openDialog(tester, comments: 3);
-      expect(find.text('3'), findsWidgets);
+      expect(find.text('Task chat'), findsOneWidget);
+      expect(find.textContaining('3 messages'), findsOneWidget);
+      expect(find.text('Open chat'), findsOneWidget);
     });
 
     testWidgets('an unassigned task says so rather than showing nothing', (
