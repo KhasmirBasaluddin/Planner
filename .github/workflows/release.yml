@@ -122,6 +122,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # "Planner 1.0.1" rather than the bare tag, which read as a commit
+          # reference rather than a thing people install.
+          name: Planner ${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: |
             dist/PlannerSetup-*.exe
