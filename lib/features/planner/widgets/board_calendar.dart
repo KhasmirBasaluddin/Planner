@@ -19,7 +19,6 @@ class BoardCalendar extends StatefulWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
@@ -28,7 +27,6 @@ class BoardCalendar extends StatefulWidget {
   /// The task the attention banner just revealed, if any. The calendar jumps
   /// to its due month and lights its chip up.
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   /// The board's statuses, used to resolve the label behind each task.
   final List<StatusLabel> statuses;
@@ -120,7 +118,6 @@ class _BoardCalendarState extends State<BoardCalendar> {
                   onToday: _goToToday,
                   onOpenTask: _openTask,
                   highlightedTaskId: widget.highlightedTaskId,
-                  highlightKey: widget.highlightKey,
                 )
               : _MonthCalendar(
                   month: _visibleMonth,
@@ -132,7 +129,6 @@ class _BoardCalendarState extends State<BoardCalendar> {
                   onToday: _goToToday,
                   onOpenTask: _openTask,
                   highlightedTaskId: widget.highlightedTaskId,
-                  highlightKey: widget.highlightKey,
                 ),
         );
       },
@@ -176,7 +172,6 @@ class _MonthCalendar extends StatelessWidget {
     required this.onToday,
     required this.onOpenTask,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final DateTime month;
@@ -188,7 +183,6 @@ class _MonthCalendar extends StatelessWidget {
   final VoidCallback onToday;
   final ValueChanged<_CalendarTask> onOpenTask;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -231,7 +225,6 @@ class _MonthCalendar extends StatelessWidget {
                         statuses: statuses,
                         onOpenTask: onOpenTask,
                         highlightedTaskId: highlightedTaskId,
-                        highlightKey: highlightKey,
                       ),
                     ),
                 ],
@@ -254,7 +247,6 @@ class _AgendaCalendar extends StatelessWidget {
     required this.onToday,
     required this.onOpenTask,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final DateTime month;
@@ -266,7 +258,6 @@ class _AgendaCalendar extends StatelessWidget {
   final VoidCallback onToday;
   final ValueChanged<_CalendarTask> onOpenTask;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -303,7 +294,6 @@ class _AgendaCalendar extends StatelessWidget {
               statuses: statuses,
               onOpenTask: onOpenTask,
               highlightedTaskId: highlightedTaskId,
-              highlightKey: highlightKey,
             ),
             const SizedBox(height: 10),
           ],
@@ -427,7 +417,6 @@ class _DayCell extends StatelessWidget {
     required this.statuses,
     required this.onOpenTask,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final DateTime date;
@@ -437,7 +426,6 @@ class _DayCell extends StatelessWidget {
   final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   /// The chips shown in the cell itself. Three fit; a busier day shows two
   /// plus a "+N more" opener, and a revealed task is always among them.
@@ -515,9 +503,6 @@ class _DayCell extends StatelessWidget {
               status: statusById(statuses, entry.task.statusId),
               onOpenTask: onOpenTask,
               highlighted: entry.task.id == highlightedTaskId,
-              highlightKey: entry.task.id == highlightedTaskId
-                  ? highlightKey
-                  : null,
             ),
             const SizedBox(height: 4),
           ],
@@ -631,7 +616,6 @@ class _AgendaDay extends StatelessWidget {
     required this.statuses,
     required this.onOpenTask,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final DateTime date;
@@ -640,7 +624,6 @@ class _AgendaDay extends StatelessWidget {
   final List<StatusLabel> statuses;
   final ValueChanged<_CalendarTask> onOpenTask;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -670,9 +653,6 @@ class _AgendaDay extends StatelessWidget {
               status: statusById(statuses, entry.task.statusId),
               onOpenTask: onOpenTask,
               highlighted: entry.task.id == highlightedTaskId,
-              highlightKey: entry.task.id == highlightedTaskId
-                  ? highlightKey
-                  : null,
             ),
             if (entry != tasks.last) const SizedBox(height: 8),
           ],
@@ -688,14 +668,12 @@ class _CalendarTaskChip extends StatelessWidget {
     required this.status,
     required this.onOpenTask,
     this.highlighted = false,
-    this.highlightKey,
   });
 
   final _CalendarTask entry;
   final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
   final bool highlighted;
-  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -780,8 +758,7 @@ class _CalendarTaskChip extends StatelessWidget {
       ),
     );
 
-    final key = highlightKey;
-    return key == null ? chip : KeyedSubtree(key: key, child: chip);
+    return chip;
   }
 }
 
@@ -792,7 +769,6 @@ class _AgendaTaskCard extends StatelessWidget {
     required this.status,
     required this.onOpenTask,
     this.highlighted = false,
-    this.highlightKey,
   });
 
   final _CalendarTask entry;
@@ -800,7 +776,6 @@ class _AgendaTaskCard extends StatelessWidget {
   final StatusLabel? status;
   final ValueChanged<_CalendarTask> onOpenTask;
   final bool highlighted;
-  final GlobalKey? highlightKey;
 
   @override
   Widget build(BuildContext context) {
@@ -865,8 +840,7 @@ class _AgendaTaskCard extends StatelessWidget {
       ),
     );
 
-    final key = highlightKey;
-    return key == null ? card : KeyedSubtree(key: key, child: card);
+    return card;
   }
 }
 

@@ -11,6 +11,13 @@ import 'planner_dialogs.dart';
 const double _minTableWidth = 520;
 const double _rowHeight = 54;
 
+// Fixed pieces of the table's vertical rhythm, named so the reveal scroll can
+// measure where a row sits without asking the widget tree. Keep these in step
+// with the build method if the layout changes.
+const double _headerExtent = 36 + 10; // column header, plus the gap under it
+const double _groupHeaderExtent = 44; // a group's title bar
+const double _groupGap = 22; // space between one group and the next
+
 /// Which optional columns fit at the current width.
 ///
 /// The table used to hold a 900px minimum and scroll sideways below it, which
@@ -53,16 +60,14 @@ class BoardTable extends StatefulWidget {
     required this.onOpenChat,
     this.onTaskReorder,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
 
-  /// The task the attention banner just revealed, if any. Its row lights up
-  /// and carries [highlightKey] so the page can scroll it into view.
+  /// The task the attention banner just revealed, if any. Its row lights up,
+  /// and the table scrolls to bring it into view.
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   /// The board's statuses, in display order — the choices the status menu
   /// offers and the source for resolving a task's label.
@@ -88,22 +93,73 @@ class BoardTable extends StatefulWidget {
 class _BoardTableState extends State<BoardTable> {
   final ScrollController _verticalController = ScrollController();
 
-  /// The first group containing the highlighted task, or -1. Only that group
-  /// is handed the highlight key — see the comment at its use site.
-  int get _highlightGroupIndex {
-    final id = widget.highlightedTaskId;
-    if (id == null) {
-      return -1;
+  @override
+  void initState() {
+    super.initState();
+    _scrollToHighlight();
+  }
+
+  @override
+  void didUpdateWidget(covariant BoardTable oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.highlightedTaskId != oldWidget.highlightedTaskId) {
+      _scrollToHighlight();
     }
-    return widget.groups.indexWhere(
-      (group) => group.tasks.any((task) => task.id == id),
-    );
   }
 
   @override
   void dispose() {
     _verticalController.dispose();
     super.dispose();
+  }
+
+  /// Brings the revealed row into view by measuring where it sits.
+  ///
+  /// Computed rather than delegated to a GlobalKey on the row. A key has to
+  /// be attached to exactly one widget at a time, and the same task can be on
+  /// screen twice — grouped by assignee it appears under every assignee, and
+  /// during a view change the outgoing view is still mounted. Both crashed
+  /// the app with a duplicate-key assertion. Arithmetic over the group
+  /// heights has no such constraint.
+  void _scrollToHighlight() {
+    final id = widget.highlightedTaskId;
+    if (id == null) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_verticalController.hasClients) {
+        return;
+      }
+
+      // Walk the groups above the target, adding each one's rendered height.
+      var offset = _headerExtent;
+      for (final group in widget.groups) {
+        final collapsed = widget.collapsedGroupIds.contains(group.id);
+        final index = collapsed
+            ? -1
+            : group.tasks.indexWhere((task) => task.id == id);
+        if (index >= 0) {
+          offset += _groupHeaderExtent + index * _rowHeight;
+          // Landed a little below the top edge, so the row reads as part of
+          // its group rather than flush against the header.
+          final target = (offset - 120).clamp(
+            0.0,
+            _verticalController.position.maxScrollExtent,
+          );
+          _verticalController.animateTo(
+            target,
+            duration: const Duration(milliseconds: 350),
+            curve: Curves.easeOutCubic,
+          );
+          return;
+        }
+        offset += _groupHeaderExtent + _groupGap;
+        if (!collapsed) {
+          offset += group.tasks.length * _rowHeight;
+        }
+      }
+    });
   }
 
   @override
@@ -165,13 +221,6 @@ class _BoardTableState extends State<BoardTable> {
                         onOpenChat: widget.onOpenChat,
                         onTaskReorder: widget.onTaskReorder,
                         highlightedTaskId: widget.highlightedTaskId,
-                        // Only the first group holding the task carries the
-                        // key. Grouping by assignee puts a task shared by two
-                        // people into both groups, and two widgets claiming
-                        // one GlobalKey tears the tree apart.
-                        highlightKey: entry.$1 == _highlightGroupIndex
-                            ? widget.highlightKey
-                            : null,
                       ),
                       const SizedBox(height: 22),
                     ],
@@ -264,7 +313,6 @@ class GroupSection extends StatelessWidget {
     required this.onOpenChat,
     this.onTaskReorder,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final TaskGroup group;
@@ -273,7 +321,6 @@ class GroupSection extends StatelessWidget {
   final List<StatusLabel> statuses;
   final bool collapsed;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
   final VoidCallback onToggle;
   final VoidCallback onRename;
   final VoidCallback onDelete;
@@ -401,7 +448,6 @@ class GroupSection extends StatelessWidget {
                       onOpenChat: onOpenChat,
                       dragEnabled: onTaskReorder != null,
                       highlighted: highlighted,
-                      highlightKey: highlighted ? highlightKey : null,
                     ),
                   );
                 },
@@ -451,7 +497,6 @@ class TaskRow extends StatelessWidget {
     required this.onOpenChat,
     required this.dragEnabled,
     this.highlighted = false,
-    this.highlightKey,
   });
 
   final PlannerTask task;
@@ -459,10 +504,8 @@ class TaskRow extends StatelessWidget {
   final int rowIndex;
   final Color groupColor;
 
-  /// True while the attention banner is pointing at this row; it tints the
-  /// row and, via [highlightKey], lets the page scroll it into view.
+  /// True while the attention banner is pointing at this row, which tints it.
   final bool highlighted;
-  final GlobalKey? highlightKey;
   final List<WorkspaceMember> members;
   final List<StatusLabel> statuses;
   final ValueChanged<PlannerTask> onEditTask;
@@ -594,8 +637,7 @@ class TaskRow extends StatelessWidget {
       ),
     );
 
-    final key = highlightKey;
-    return key == null ? row : KeyedSubtree(key: key, child: row);
+    return row;
   }
 }
 

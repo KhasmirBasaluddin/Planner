@@ -67,23 +67,10 @@ class _PlannerPageState extends State<PlannerPage> {
   /// resolved — brings the banner back.
   String? _dismissedAttentionSignature;
 
-  /// The task the attention banner just revealed. Its row or card carries
-  /// [_highlightKey] and lights up until the timer clears this again.
+  /// The task the attention banner just revealed. Each view lights it up and
+  /// scrolls to it, until the timer clears this again.
   String? _highlightedTaskId;
   Timer? _highlightTimer;
-
-  /// One key per view, not one shared between them.
-  ///
-  /// AnimatedSwitcher keeps the outgoing view in the tree while the incoming
-  /// one fades in, so a single GlobalKey was attached in two places at once
-  /// and Flutter tore the tree apart complaining about a duplicate. Each view
-  /// gets its own; the scroll below reads whichever belongs to the mode on
-  /// screen.
-  final Map<ViewMode, GlobalKey> _highlightKeys = {
-    for (final mode in ViewMode.values) mode: GlobalKey(),
-  };
-
-  GlobalKey get _highlightKey => _highlightKeys[_mode]!;
 
   /// Coalesces realtime bursts into one board reload — see [_scheduleRefresh].
   Timer? _refreshDebounce;
@@ -1956,34 +1943,12 @@ class _PlannerPageState extends State<PlannerPage> {
       }
     });
 
-    // After the frame, so the highlighted row exists to scroll to.
-    //
-    // Retried a few times because switching view mode animates: the row is
-    // not in the tree on the first frame after the tap, and a single attempt
-    // silently did nothing whenever the reveal also changed views. The
-    // kanban does its own index-based scroll — a lazy column has no element
-    // to find — so this is the table and calendar's path.
-    var attempts = 0;
-    void tryScroll() {
-      if (!mounted || _highlightedTaskId == null) {
-        return;
-      }
-      final target = _highlightKey.currentContext;
-      if (target != null) {
-        Scrollable.ensureVisible(
-          target,
-          alignment: 0.3,
-          duration: const Duration(milliseconds: 350),
-          curve: Curves.easeOutCubic,
-        );
-        return;
-      }
-      if (attempts++ < 5) {
-        WidgetsBinding.instance.addPostFrameCallback((_) => tryScroll());
-      }
-    }
-
-    WidgetsBinding.instance.addPostFrameCallback((_) => tryScroll());
+    // Scrolling is each view's own job from here: the table measures where
+    // the row sits, the kanban column scrolls by index, and the calendar
+    // jumps to the month. Nothing is threaded through a GlobalKey, which is
+    // what used to break — the same task can legitimately be on screen twice
+    // (grouped by assignee, or mid-transition between views) and a key
+    // attached in two places crashes the frame.
   }
 
   Future<void> _openChat(PlannerTask task) async {
@@ -2102,7 +2067,6 @@ class _PlannerPageState extends State<PlannerPage> {
                       Expanded(
                         child: _PlannerContent(
                           highlightedTaskId: _highlightedTaskId,
-                          highlightKeys: _highlightKeys,
                           loading: _loading,
                           workspaceName: _workspace?.name ?? 'your workspace',
                           error: _error,
@@ -2200,7 +2164,6 @@ class _PlannerContent extends StatelessWidget {
     required this.onOpenChat,
     required this.onTaskReorder,
     this.highlightedTaskId,
-    this.highlightKeys = const {},
   });
 
   final bool loading;
@@ -2209,9 +2172,6 @@ class _PlannerContent extends StatelessWidget {
   /// The task the attention banner just revealed, passed through to whichever
   /// view is active so it can light the task up and scroll to it.
   final String? highlightedTaskId;
-
-  /// One key per view — see the field of the same name on the page state.
-  final Map<ViewMode, GlobalKey> highlightKeys;
   final Board? board;
   final String workspaceName;
   final List<TaskGroup> groups;
@@ -2315,7 +2275,6 @@ class _PlannerContent extends StatelessWidget {
                 groups: groups,
                 members: members,
                 highlightedTaskId: highlightedTaskId,
-                highlightKey: highlightKeys[ViewMode.table],
                 statuses: board!.statuses,
                 collapsedGroupIds: collapsedGroupIds,
                 onToggleGroup: onToggleGroup,
@@ -2342,7 +2301,6 @@ class _PlannerContent extends StatelessWidget {
                 groups: groups,
                 members: members,
                 highlightedTaskId: highlightedTaskId,
-                highlightKey: highlightKeys[ViewMode.kanban],
                 statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,
@@ -2357,7 +2315,6 @@ class _PlannerContent extends StatelessWidget {
                 groups: groups,
                 members: members,
                 highlightedTaskId: highlightedTaskId,
-                highlightKey: highlightKeys[ViewMode.calendar],
                 statuses: board!.statuses,
                 onEditTask: onEditTask,
                 onDeleteTask: onDeleteTask,

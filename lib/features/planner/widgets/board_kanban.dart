@@ -17,16 +17,14 @@ class BoardKanban extends StatelessWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final List<TaskGroup> groups;
   final List<WorkspaceMember> members;
 
-  /// The task the attention banner just revealed, if any. Its card lights up
-  /// and carries [highlightKey] so the page can scroll it into view.
+  /// The task the attention banner just revealed, if any. Its card lights up,
+  /// and the column scrolls to bring it into view.
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
 
   /// One column per status the board defines, in display order.
   final List<StatusLabel> statuses;
@@ -84,7 +82,6 @@ class BoardKanban extends StatelessWidget {
           onProgressChanged: onProgressChanged,
           onOpenChat: onOpenChat,
           highlightedTaskId: highlightedTaskId,
-          highlightKey: highlightKey,
         );
 
         if (fitCount >= columns) {
@@ -146,14 +143,12 @@ class _KanbanColumn extends StatefulWidget {
     required this.onProgressChanged,
     required this.onOpenChat,
     this.highlightedTaskId,
-    this.highlightKey,
   });
 
   final StatusLabel status;
   final List<_KanbanTask> tasks;
   final List<WorkspaceMember> members;
   final String? highlightedTaskId;
-  final GlobalKey? highlightKey;
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final Future<void> Function(PlannerTask task, StatusLabel status)
@@ -232,7 +227,6 @@ class _KanbanColumnState extends State<_KanbanColumn> {
     final tasks = widget.tasks;
     final members = widget.members;
     final highlightedTaskId = widget.highlightedTaskId;
-    final highlightKey = widget.highlightKey;
     final onEditTask = widget.onEditTask;
     final onDeleteTask = widget.onDeleteTask;
     final onStatusChanged = widget.onStatusChanged;
@@ -319,18 +313,9 @@ class _KanbanColumnState extends State<_KanbanColumn> {
                             onOpenChat: onOpenChat,
                             highlighted: highlighted,
                           );
-                          final key = highlighted ? highlightKey : null;
                           // RepaintBoundary per card: without it, one card's
                           // hover or drag repaints the whole column, which is
                           // what made a long list feel heavy under the mouse.
-                          if (key != null) {
-                            return RepaintBoundary(
-                              child: KeyedSubtree(
-                                key: key,
-                                child: _draggableCard(entry, card),
-                              ),
-                            );
-                          }
                           return RepaintBoundary(
                             child: _draggableCard(entry, card),
                           );
