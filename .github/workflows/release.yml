@@ -20,9 +20,38 @@ jobs:
           channel: stable
           cache: true
 
+      # Checked before anything is built, because the failure it prevents is
+      # silent: without credentials the app still compiles, installs and
+      # launches, and only then shows the "Supabase setup required" screen —
+      # by which point it is already published and people have downloaded it.
+      - name: Check release credentials
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:SUPABASE_URL)) {
+            $missing += 'SUPABASE_URL'
+          }
+          if ([string]::IsNullOrWhiteSpace($env:SUPABASE_ANON_KEY)) {
+            $missing += 'SUPABASE_ANON_KEY'
+          }
+          if ($missing.Count -gt 0) {
+            Write-Host "::error::Missing repository secret(s): $($missing -join ', '). Add them under Settings -> Secrets and variables -> Actions, then re-run. Without them the published build cannot reach Supabase."
+            exit 1
+          }
+          Write-Host "Supabase credentials present."
+
+      # An empty .env, not a copy of .env.example.
+      #
+      # The file has to exist — it is declared as an asset, and a missing
+      # asset fails the build — but its contents must not. Copying the example
+      # shipped `your-project-ref` placeholders inside the binary, one
+      # precedence rule away from being read as real configuration.
       - name: Prepare build configuration
         shell: pwsh
-        run: Copy-Item .env.example .env
+        run: New-Item -ItemType File -Path .env -Force | Out-Null
 
       # The version comes from the tag (v1.2.0 -> 1.2.0) and is stamped into
       # the executable, the installer, and the artifact names. The in-app
@@ -53,6 +82,31 @@ jobs:
           --build-number=${{ github.run_number }}
           --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }}
           --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
+
+      # Belt and braces: confirm the credentials actually reached the binary.
+      # A --dart-define that silently failed to apply looks exactly like a
+      # successful build until someone installs it.
+      - name: Verify the build is configured
+        shell: pwsh
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        run: |
+          $exe = 'build\windows\x64\runner\Release\planner.exe'
+          $data = 'build\windows\x64\runner\Release\data\app.so'
+          $host_ = ([uri]$env:SUPABASE_URL).Host
+          $found = $false
+          foreach ($file in @($exe, $data)) {
+            if (Test-Path $file) {
+              $bytes = [IO.File]::ReadAllBytes($file)
+              $text = [Text.Encoding]::ASCII.GetString($bytes)
+              if ($text.Contains($host_)) { $found = $true; break }
+            }
+          }
+          if (-not $found) {
+            Write-Host "::error::The built app does not contain the Supabase URL. The --dart-define values did not reach the binary, so this build would ship unconfigured."
+            exit 1
+          }
+          Write-Host "Build carries the Supabase configuration."
 
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
