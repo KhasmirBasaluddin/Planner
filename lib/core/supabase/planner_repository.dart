@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -1052,14 +1051,6 @@ class PlannerRepository {
 
   // === Work notes ===
 
-  /// The bucket work-note attachments live in. Private: nothing here is
-  /// readable without a signed URL, which the client asks for per file.
-  static const String attachmentBucket = 'task-attachments';
-
-  /// Matches the CHECK in migration 0013 and the bucket's own limit, so an
-  /// oversized file is refused before it is uploaded rather than after.
-  static const int maxAttachmentBytes = 25 * 1024 * 1024;
-
   /// A task's work log, oldest first — the order the work happened in.
   Future<List<TaskNote>> loadNotes(String taskId) async {
     final rows = await _client
@@ -1074,54 +1065,18 @@ class PlannerRepository {
         .isFilter('deleted_at', null)
         .order('created_at');
 
-    if (rows.isEmpty) {
-      return [];
-    }
-
-    // One query for every attachment on the task rather than one per note:
-    // a review thread of ten notes would otherwise cost eleven round trips.
-    final files = await _loadAttachments(
-      rows.map((row) => row['id'] as String).toList(),
-    );
-
     return rows.map((row) {
       final author = row['author'];
-      final id = row['id'] as String;
       return TaskNote.fromMap(
         row,
         author: author is Map<String, dynamic>
             ? UserProfile.fromMap(author)
             : null,
-        attachments: files[id] ?? const [],
       );
     }).toList();
   }
 
-  Future<Map<String, List<NoteAttachment>>> _loadAttachments(
-    List<String> noteIds,
-  ) async {
-    if (noteIds.isEmpty) {
-      return {};
-    }
-    final rows = await _client
-        .from('task_note_attachments')
-        .select('id, note_id, storage_path, file_name, content_type, byte_size')
-        .inFilter('note_id', noteIds)
-        .order('created_at');
-
-    final grouped = <String, List<NoteAttachment>>{};
-    for (final row in rows) {
-      final attachment = NoteAttachment.fromMap(row);
-      grouped.putIfAbsent(attachment.noteId, () => []).add(attachment);
-    }
-    return grouped;
-  }
-
-  /// Writes a note, then attaches whatever files came with it.
-  ///
-  /// The note row is created first because the attachment policy checks that
-  /// the caller owns the note it is attaching to — so the note has to exist,
-  /// and it has to be theirs, before any file can be linked.
+  /// Writes a note.
   ///
   /// [statusFrom] and [statusTo] record the move this note explains. Stored as
   /// names rather than ids: a label can be renamed or deleted afterwards, and
@@ -1133,7 +1088,6 @@ class PlannerRepository {
     TaskNoteKind kind = TaskNoteKind.update,
     String? statusFrom,
     String? statusTo,
-    List<NoteUpload> uploads = const [],
   }) async {
     final userId = _uid;
     if (userId == null) {
@@ -1154,76 +1108,7 @@ class PlannerRepository {
         .select('id')
         .single();
 
-    final noteId = row['id'] as String;
-
-    for (final upload in uploads) {
-      await _attach(
-        noteId: noteId,
-        taskId: taskId,
-        workspaceId: workspaceId,
-        upload: upload,
-      );
-    }
-
-    return noteId;
-  }
-
-  /// Uploads one file and records it against a note.
-  ///
-  /// The path leads with the workspace id because the storage policy reads it
-  /// straight out of the object name — `(storage.foldername(name))[1]` — to
-  /// decide whether the caller is a member. A uuid prefix on the filename
-  /// keeps two people uploading `photo.jpg` from overwriting each other.
-  Future<void> _attach({
-    required String noteId,
-    required String taskId,
-    required String workspaceId,
-    required NoteUpload upload,
-  }) async {
-    if (upload.bytes.length > maxAttachmentBytes) {
-      throw StateError('${upload.fileName} is larger than 25 MB.');
-    }
-
-    final safeName = upload.fileName
-        .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')
-        .replaceAll(RegExp(r'_+'), '_');
-    final path = '$workspaceId/$taskId/${_randomId()}-$safeName';
-
-    await _client.storage
-        .from(attachmentBucket)
-        .uploadBinary(
-          path,
-          upload.bytes,
-          fileOptions: FileOptions(contentType: upload.contentType),
-        );
-
-    await _client.from('task_note_attachments').insert({
-      'note_id': noteId,
-      'task_id': taskId,
-      'workspace_id': workspaceId,
-      'storage_path': path,
-      'file_name': upload.fileName,
-      'content_type': upload.contentType,
-      'byte_size': upload.bytes.length,
-    });
-  }
-
-  /// A short-lived URL for one attachment.
-  ///
-  /// The bucket is private, so there is no permanent address to link to. An
-  /// hour is long enough to open a file and short enough that a URL pasted
-  /// somewhere it should not be stops working.
-  Future<String> attachmentUrl(NoteAttachment attachment) {
-    return _client.storage
-        .from(attachmentBucket)
-        .createSignedUrl(attachment.storagePath, 3600);
-  }
-
-  /// The raw bytes, for previewing an image inline.
-  Future<Uint8List> attachmentBytes(NoteAttachment attachment) {
-    return _client.storage
-        .from(attachmentBucket)
-        .download(attachment.storagePath);
+    return row['id'] as String;
   }
 
   Future<void> editNote({required String noteId, required String body}) async {
@@ -1264,27 +1149,7 @@ class PlannerRepository {
           ),
           callback: (_) => onChange(),
         )
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'task_note_attachments',
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'task_id',
-            value: taskId,
-          ),
-          callback: (_) => onChange(),
-        )
         .subscribe(_resyncOnResubscribe(onResync ?? onChange));
-  }
-
-  /// Cheap unique-enough prefix for a storage path. Not security-bearing —
-  /// the bucket is private and RLS decides access; this only keeps two
-  /// uploads of the same filename apart.
-  String _randomId() {
-    final now = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
-    final salt = identityHashCode(Object()).toRadixString(36);
-    return '$now$salt';
   }
 
   // === Recycle bin ===

@@ -8,6 +8,11 @@ import 'package:planner/models/planner_models.dart';
 /// The behaviour worth pinning down is that a cancel really cancels — the
 /// whole status change is abandoned, so a mis-drag costs nothing — and that
 /// the note stays optional in both directions.
+///
+/// Several finders below use findsWidgets rather than findsOneWidget on
+/// purpose: the dialog names the destination status in its header *and* on the
+/// chip that selects it, and the confirm button repeats the action's name. Two
+/// matches is the design, not a duplicate.
 void main() {
   const task = PlannerTask(
     id: 't1',
@@ -78,7 +83,7 @@ void main() {
     testWidgets('confirming returns the typed note, trimmed', (tester) async {
       await open(tester);
       await tester.enterText(find.byType(TextField), '  Numbers are wrong  ');
-      await tester.tap(find.text('Send back'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Send back'));
       await tester.pumpAndSettle();
       expect(settled, isTrue);
       expect(decision?.body, 'Numbers are wrong');
@@ -86,11 +91,10 @@ void main() {
 
     testWidgets('the note is optional', (tester) async {
       await open(tester);
-      await tester.tap(find.text('Send back'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Send back'));
       await tester.pumpAndSettle();
       expect(settled, isTrue);
       expect(decision?.body, '');
-      expect(decision?.uploads, isEmpty);
     });
 
     testWidgets('cancelling abandons the whole move', (tester) async {
@@ -111,7 +115,7 @@ void main() {
       tester,
     ) async {
       await open(tester, targets: const [working, stuck]);
-      expect(find.text('Working on it'), findsOneWidget);
+      expect(find.text('Working on it'), findsWidgets);
       expect(find.text('Stuck'), findsOneWidget);
     });
 
@@ -121,7 +125,7 @@ void main() {
       await open(tester, targets: const [working, stuck]);
       await tester.tap(find.text('Stuck'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Send back'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Send back'));
       await tester.pumpAndSettle();
       expect(decision?.target?.id, 's-stuck');
     });
@@ -135,7 +139,7 @@ void main() {
       tester,
     ) async {
       await open(tester);
-      await tester.tap(find.text('Send back'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Send back'));
       await tester.pumpAndSettle();
       // Null rather than an empty list: "leave it with whoever has it" and
       // "unassign everyone" must not collapse into the same answer.
@@ -146,13 +150,13 @@ void main() {
   group('submitting work', () {
     testWidgets('confirms with the submit wording', (tester) async {
       await open(tester, kind: ReviewKind.submit);
-      expect(find.text('Submit work'), findsOneWidget);
+      expect(find.widgetWithText(FilledButton, 'Submit work'), findsOneWidget);
       expect(find.text('Send back'), findsNothing);
     });
 
     testWidgets('the note is optional here too', (tester) async {
       await open(tester, kind: ReviewKind.submit);
-      await tester.tap(find.text('Submit work'));
+      await tester.tap(find.widgetWithText(FilledButton, 'Submit work'));
       await tester.pumpAndSettle();
       expect(decision?.body, '');
     });
@@ -163,22 +167,6 @@ void main() {
       await open(tester, kind: ReviewKind.submit, targets: const [working]);
       expect(find.text('Move it to'), findsNothing);
       expect(find.text('Who picks it up'), findsNothing);
-    });
-  });
-
-  group('content types', () {
-    test('images are recognised so they can preview inline', () {
-      expect(contentTypeForFile('shot.PNG'), 'image/png');
-      expect(contentTypeForFile('shot.jpeg'), 'image/jpeg');
-    });
-
-    test('documents get their own type', () {
-      expect(contentTypeForFile('report.pdf'), 'application/pdf');
-    });
-
-    test('anything unrecognised still uploads', () {
-      expect(contentTypeForFile('mystery.xyz'), 'application/octet-stream');
-      expect(contentTypeForFile('noextension'), 'application/octet-stream');
     });
   });
 }

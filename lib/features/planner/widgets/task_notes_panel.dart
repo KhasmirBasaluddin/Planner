@@ -1,15 +1,12 @@
 import 'dart:async';
 
-import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/supabase/planner_repository.dart';
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
 import '../../../shared/widgets/user_avatar.dart';
-import 'review_dialog.dart' show contentTypeForFile;
 
 /// A task's work log: what was done, and what proves it.
 ///
@@ -59,7 +56,6 @@ class _TaskNotesPanelState extends State<TaskNotesPanel> {
   final ScrollController _scroll = ScrollController();
 
   List<TaskNote> _notes = [];
-  final List<NoteUpload> _pending = [];
 
   bool _loading = true;
   bool _saving = false;
@@ -119,56 +115,12 @@ class _TaskNotesPanelState extends State<TaskNotesPanel> {
     }
   }
 
-  Future<void> _pickFiles() async {
-    final result = await FilePicker.pickFiles(
-      dialogTitle: 'Attach to note',
-      allowMultiple: true,
-      // Keeps the picker in front of the app on Windows rather than letting
-      // it open behind the dialog that asked for it.
-      lockParentWindow: true,
-      // Bytes rather than a path: the upload wants the contents, and on
-      // desktop a path would mean reading the file a second time.
-      withData: true,
-    );
-    if (result == null) {
-      return;
-    }
-
-    final rejected = <String>[];
-    for (final file in result.files) {
-      final bytes = file.bytes;
-      if (bytes == null) {
-        continue;
-      }
-      if (bytes.length > PlannerRepository.maxAttachmentBytes) {
-        rejected.add(file.name);
-        continue;
-      }
-      _pending.add(
-        NoteUpload(
-          fileName: file.name,
-          bytes: bytes,
-          contentType: contentTypeForFile(file.name),
-        ),
-      );
-    }
-
-    if (mounted) {
-      setState(() {
-        _error = rejected.isEmpty
-            ? null
-            : '${rejected.join(', ')} — larger than 25 MB, not attached.';
-      });
-    }
-  }
-
   /// True once the newest note is already an approval — nothing left to sign
   /// off, so the bar would only invite a duplicate.
   bool get _awaitingNothing =>
       _notes.isNotEmpty && _notes.last.kind == TaskNoteKind.approval;
 
-  bool get _canPost =>
-      _composer.text.trim().isNotEmpty || _pending.isNotEmpty;
+  bool get _canPost => _composer.text.trim().isNotEmpty;
 
   Future<void> _post() async {
     if (!_canPost || _saving) {
@@ -184,16 +136,12 @@ class _TaskNotesPanelState extends State<TaskNotesPanel> {
         taskId: widget.task.id,
         workspaceId: widget.workspaceId,
         body: _composer.text,
-        uploads: List.of(_pending),
       );
       if (!mounted) {
         return;
       }
       _composer.clear();
-      setState(() {
-        _pending.clear();
-        _saving = false;
-      });
+      setState(() => _saving = false);
       await _load();
       _scrollToEnd();
     } catch (error) {
@@ -281,11 +229,8 @@ class _TaskNotesPanelState extends State<TaskNotesPanel> {
         if (widget.canEdit)
           _Composer(
             controller: _composer,
-            pending: _pending,
             saving: _saving,
             canPost: _canPost,
-            onAttach: _pickFiles,
-            onRemoveAt: (index) => setState(() => _pending.removeAt(index)),
             onPost: _post,
           ),
       ],
@@ -438,21 +383,6 @@ class _NoteCard extends StatelessWidget {
                 ),
               ),
             ),
-          if (note.attachments.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 0),
-              child: Wrap(
-                spacing: 7,
-                runSpacing: 7,
-                children: [
-                  for (final file in note.attachments)
-                    _AttachmentChip(
-                      attachment: file,
-                      repository: repository,
-                    ),
-                ],
-              ),
-            ),
           const SizedBox(height: 12),
         ],
       ),
@@ -482,123 +412,17 @@ class _NoteCard extends StatelessWidget {
   }
 }
 
-/// One attached file, opened on tap through a signed URL.
-class _AttachmentChip extends StatefulWidget {
-  const _AttachmentChip({required this.attachment, required this.repository});
-
-  final NoteAttachment attachment;
-  final PlannerRepository repository;
-
-  @override
-  State<_AttachmentChip> createState() => _AttachmentChipState();
-}
-
-class _AttachmentChipState extends State<_AttachmentChip> {
-  bool _opening = false;
-
-  Future<void> _open() async {
-    if (_opening) {
-      return;
-    }
-    setState(() => _opening = true);
-    try {
-      final url = await widget.repository.attachmentUrl(widget.attachment);
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } catch (_) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-          ..hideCurrentSnackBar()
-          ..showSnackBar(
-            const SnackBar(content: Text('Could not open that file.')),
-          );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _opening = false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final file = widget.attachment;
-
-    return Tooltip(
-      message: '${file.fileName} · ${file.readableSize}',
-      child: Material(
-        color: plannerSurface,
-        borderRadius: BorderRadius.circular(radiusSm),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(radiusSm),
-          onTap: _open,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(radiusSm),
-              border: Border.all(color: plannerBorder),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (_opening)
-                  const SizedBox(
-                    width: 13,
-                    height: 13,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                else
-                  Icon(
-                    file.isImage
-                        ? Icons.image_outlined
-                        : Icons.description_outlined,
-                    size: 14,
-                    color: plannerMuted,
-                  ),
-                const SizedBox(width: 6),
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 150),
-                  child: Text(
-                    file.fileName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: plannerText,
-                      fontSize: 11.5,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  file.readableSize,
-                  style: const TextStyle(color: plannerFaint, fontSize: 10.5),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 class _Composer extends StatelessWidget {
   const _Composer({
     required this.controller,
-    required this.pending,
     required this.saving,
     required this.canPost,
-    required this.onAttach,
-    required this.onRemoveAt,
     required this.onPost,
   });
 
   final TextEditingController controller;
-  final List<NoteUpload> pending;
   final bool saving;
   final bool canPost;
-  final VoidCallback onAttach;
-  final ValueChanged<int> onRemoveAt;
   final VoidCallback onPost;
 
   @override
@@ -613,21 +437,6 @@ class _Composer extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (pending.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 9),
-              child: Wrap(
-                spacing: 7,
-                runSpacing: 7,
-                children: [
-                  for (var i = 0; i < pending.length; i++)
-                    _PendingChip(
-                      upload: pending[i],
-                      onRemove: () => onRemoveAt(i),
-                    ),
-                ],
-              ),
-            ),
           TextField(
             controller: controller,
             enabled: !saving,
@@ -635,18 +444,13 @@ class _Composer extends StatelessWidget {
             maxLines: 5,
             maxLength: 5000,
             decoration: const InputDecoration(
-              hintText: 'What was done? Attach a photo or file as proof.',
+              hintText: 'What was done?',
               counterText: '',
             ),
           ),
           const SizedBox(height: 9),
           Row(
             children: [
-              OutlinedButton.icon(
-                onPressed: saving ? null : onAttach,
-                icon: const Icon(Icons.attach_file_rounded, size: 16),
-                label: const Text('Attach'),
-              ),
               const Spacer(),
               FilledButton.icon(
                 onPressed: canPost && !saving ? onPost : null,
@@ -663,61 +467,6 @@ class _Composer extends StatelessWidget {
                 label: Text(saving ? 'Saving…' : 'Add note'),
               ),
             ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PendingChip extends StatelessWidget {
-  const _PendingChip({required this.upload, required this.onRemove});
-
-  final NoteUpload upload;
-  final VoidCallback onRemove;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(9, 6, 5, 6),
-      decoration: BoxDecoration(
-        color: tint(plannerBlue, 0.07),
-        borderRadius: BorderRadius.circular(radiusSm),
-        border: Border.all(color: tint(plannerBlue, 0.25)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            upload.isImage
-                ? Icons.image_outlined
-                : Icons.description_outlined,
-            size: 14,
-            color: plannerBlue,
-          ),
-          const SizedBox(width: 6),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 140),
-            child: Text(
-              upload.fileName,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: plannerInk,
-                fontSize: 11.5,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            upload.readableSize,
-            style: const TextStyle(color: plannerMuted, fontSize: 10.5),
-          ),
-          _TinyAction(
-            icon: Icons.close_rounded,
-            tooltip: 'Remove',
-            onPressed: onRemove,
           ),
         ],
       ),
@@ -776,8 +525,8 @@ class _NotesEmpty extends StatelessWidget {
             ),
             SizedBox(height: 5),
             Text(
-              'Notes record what was actually done, with photos or files as '
-              'proof. Submitting or sending back work adds one automatically.',
+              'Notes record what was actually done. Submitting work, or '
+              'sending it back, adds one automatically.',
               textAlign: TextAlign.center,
               style: TextStyle(color: plannerMuted, fontSize: 12, height: 1.45),
             ),

@@ -57,20 +57,21 @@ class ReleaseNotes {
 /// Newest first.
 const List<ReleaseNotes> releaseHistory = [
   ReleaseNotes(
-    version: '1.0.2',
+    version: '1.0.3',
     headline:
-        'Work notes with attachments, a proper account panel, and the board '
-        'now keeps itself up to date on its own.',
+        'Work notes on every task, a proper account panel, and the board now '
+        'keeps itself up to date on its own.',
     notes: [
       ReleaseNote(
         kind: ReleaseNoteKind.added,
-        title: 'Work notes, with photos and files',
+        title: 'Work notes on every task',
         body:
-            'Every task now has a work log beside its chat. Record what you '
-            'actually did and attach photos or files as proof. Marking a task '
-            'done asks for a note, and sending it back records why — so the '
-            'whole back-and-forth stays readable afterwards instead of being '
-            'buried in the conversation.',
+            'Every task now has a work log beside its chat, for recording what '
+            'was actually done. Finishing a task asks for a note, and sending '
+            'it back records why — whether you do it from the board, the '
+            'table, the calendar, the progress bar or the edit form. The whole '
+            'back-and-forth stays readable afterwards instead of being buried '
+            'in the conversation.',
       ),
       ReleaseNote(
         kind: ReleaseNoteKind.added,
@@ -145,6 +146,26 @@ const List<ReleaseNotes> releaseHistory = [
             'Someone invited by email who joined with the workspace code '
             'instead stayed listed under "Pending invitations" forever, even '
             'though they were already a member.',
+      ),
+    ],
+  ),
+  // 1.0.2 was published and withdrawn the same day. Its entry is kept so
+  // anyone who installed it still sees what it claimed to change, rather than
+  // updating into 1.0.3 and being told nothing happened.
+  ReleaseNotes(
+    version: '1.0.2',
+    headline:
+        'Published and withdrawn the same day. Everything it introduced ships '
+        'in 1.0.3 instead.',
+    notes: [
+      ReleaseNote(
+        kind: ReleaseNoteKind.fixed,
+        title: 'Superseded by 1.0.3',
+        body:
+            'This build went out with a bug: finishing a task from the '
+            'progress bar or the edit form skipped the note it was supposed to '
+            'ask for. Update to 1.0.3, which has the fix and everything else '
+            'this release was meant to bring.',
       ),
     ],
   ),

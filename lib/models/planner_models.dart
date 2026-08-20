@@ -1,4 +1,3 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 /// A person in a workspace. Names come from `profiles`, which mirrors
@@ -109,84 +108,6 @@ enum TaskNoteKind {
       this == TaskNoteKind.rejection || this == TaskNoteKind.approval;
 }
 
-/// A file attached to a note.
-///
-/// The bytes live in Supabase Storage; this is the pointer plus what the list
-/// needs to render without fetching anything.
-class NoteAttachment {
-  const NoteAttachment({
-    required this.id,
-    required this.noteId,
-    required this.storagePath,
-    required this.fileName,
-    required this.contentType,
-    required this.byteSize,
-  });
-
-  factory NoteAttachment.fromMap(Map<String, dynamic> map) {
-    return NoteAttachment(
-      id: map['id'] as String,
-      noteId: (map['note_id'] ?? '') as String,
-      storagePath: (map['storage_path'] ?? '') as String,
-      fileName: (map['file_name'] ?? 'file') as String,
-      contentType:
-          (map['content_type'] ?? 'application/octet-stream') as String,
-      byteSize: (map['byte_size'] as num?)?.toInt() ?? 0,
-    );
-  }
-
-  final String id;
-  final String noteId;
-  final String storagePath;
-  final String fileName;
-  final String contentType;
-  final int byteSize;
-
-  /// Images preview inline; everything else opens in the default application.
-  bool get isImage => contentType.startsWith('image/');
-
-  /// Human-readable size. Whole numbers below a megabyte — nobody needs
-  /// "384.0 KB".
-  String get readableSize {
-    if (byteSize < 1024) {
-      return '$byteSize B';
-    }
-    if (byteSize < 1024 * 1024) {
-      return '${(byteSize / 1024).round()} KB';
-    }
-    return '${(byteSize / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-}
-
-/// A file picked but not yet uploaded.
-///
-/// Held in memory between choosing a file and writing the note it belongs to,
-/// because the note row has to exist before an attachment can reference it.
-class NoteUpload {
-  const NoteUpload({
-    required this.fileName,
-    required this.bytes,
-    required this.contentType,
-  });
-
-  final String fileName;
-  final Uint8List bytes;
-  final String contentType;
-
-  bool get isImage => contentType.startsWith('image/');
-
-  String get readableSize {
-    final size = bytes.length;
-    if (size < 1024) {
-      return '$size B';
-    }
-    if (size < 1024 * 1024) {
-      return '${(size / 1024).round()} KB';
-    }
-    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
-  }
-}
-
 /// One entry in a task's work log.
 ///
 /// Distinct from a comment: a comment is conversation, this is the record of
@@ -204,13 +125,11 @@ class TaskNote {
     this.statusFrom,
     this.statusTo,
     this.editedAt,
-    this.attachments = const [],
   });
 
   factory TaskNote.fromMap(
     Map<String, dynamic> map, {
     UserProfile? author,
-    List<NoteAttachment> attachments = const [],
   }) {
     return TaskNote(
       id: map['id'] as String,
@@ -222,7 +141,6 @@ class TaskNote {
       statusTo: map['status_to'] as String?,
       editedAt: _parseDate(map['edited_at']),
       createdAt: _parseDate(map['created_at']) ?? DateTime.now(),
-      attachments: attachments,
     );
   }
 
@@ -239,7 +157,6 @@ class TaskNote {
 
   final DateTime? editedAt;
   final DateTime createdAt;
-  final List<NoteAttachment> attachments;
 
   bool get wasEdited => editedAt != null;
 
@@ -556,6 +473,21 @@ class Board {
 
   /// The statuses this board defines, in display order.
   final List<StatusLabel> statuses;
+
+  /// A task on this board by id, or null once it has been moved or deleted.
+  ///
+  /// Used where a task has to be re-read after a write: the row a callback was
+  /// handed is a snapshot, and acting on it twice would act on stale values.
+  PlannerTask? taskById(String id) {
+    for (final group in groups) {
+      for (final task in group.tasks) {
+        if (task.id == id) {
+          return task;
+        }
+      }
+    }
+    return null;
+  }
 
   StatusLabel? statusById(String? id) {
     if (id == null) {

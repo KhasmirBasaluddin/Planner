@@ -1889,12 +1889,26 @@ class _PlannerPageState extends State<PlannerPage>
       return;
     }
 
+    // Finishing a task from this form is the same act as dragging it into the
+    // Done column, and reopening one here is the same as pulling it out. Both
+    // used to slip past the review loop entirely — the status was written
+    // straight to the row, so no note was asked for and none was recorded.
+    final previous = board.statusById(task.statusId);
+    final intended = board.statusById(result.statusId);
+    final crossesReview =
+        intended != null &&
+        intended.id != previous?.id &&
+        (intended.isDone || (previous?.isDone ?? false));
+
     await _guard(() async {
       await widget.repository.updateTask(
         taskId: task.id,
         groupId: result.groupId,
         title: result.title,
-        statusId: result.statusId,
+        // Held back when the move needs reviewing: _changeStatus applies it
+        // below, with its dialog. Writing it here would leave the task
+        // finished with nothing on the record saying who finished it or why.
+        statusId: crossesReview ? task.statusId : result.statusId,
         assigneeIds: result.assigneeIds,
         priority: result.priority,
         dueDate: result.dueDate,
@@ -1904,6 +1918,15 @@ class _PlannerPageState extends State<PlannerPage>
       );
       await _loadWorkspaceData();
     }, failureMessage: 'Could not save the task.');
+
+    if (!crossesReview || !mounted) {
+      return;
+    }
+
+    // Re-read first: everything else on the form has just been saved, so the
+    // row this method was handed is a version behind.
+    final saved = _selectedBoard?.taskById(task.id) ?? task;
+    await _changeStatus(saved, intended);
   }
 
   Future<void> _deleteTask(PlannerTask task) async {
@@ -2026,7 +2049,6 @@ class _PlannerPageState extends State<PlannerPage>
           kind: submitting ? TaskNoteKind.submission : TaskNoteKind.rejection,
           statusFrom: previous?.name,
           statusTo: target.name,
-          uploads: settled.uploads,
         );
 
         // Only when the reviewer actually changed it. Null means "leave it
@@ -2069,20 +2091,63 @@ class _PlannerPageState extends State<PlannerPage>
     }, failureMessage: 'Could not approve this work.');
   }
 
+  /// Progress, and the status it drags along with it.
+  ///
+  /// Pushing the bar to 100% finishes a task exactly as surely as dropping it
+  /// in the Done column, and pulling it back off 100% reopens it. So both go
+  /// through [_changeStatus] rather than writing the status directly — that is
+  /// the one place the review loop lives, and it is why submitting used to be
+  /// asked for on a kanban drag but not on a progress change.
+  ///
+  /// The progress value is applied first so the bar lands where it was
+  /// dropped; the status move then follows, taking its dialog with it.
   Future<void> _changeProgress(PlannerTask task, double progress) async {
     if (!_requireEditor()) {
       return;
     }
+
+    final board = _selectedBoard;
+    final statuses = board?.statuses ?? const <StatusLabel>[];
+    final current = board?.statusById(task.statusId);
+    final normalized = progress.clamp(0.0, 1.0);
+
+    // Where this progress value implies the task should sit, using the
+    // board's own labels rather than the words "Done" and "Not started".
+    StatusLabel? intended;
+    if (normalized >= 1) {
+      intended = statuses.where((s) => s.isDone).firstOrNull;
+    } else if (normalized <= 0) {
+      intended = statuses.where((s) => s.isDefault).firstOrNull;
+    } else if ((current?.isDone ?? false) || (current?.isDefault ?? false)) {
+      // Mid-progress contradicts both ends, so leave whichever it is on.
+      intended = statuses.where((s) => !s.isDone && !s.isDefault).firstOrNull;
+    }
+
+    final crossesReview =
+        intended != null &&
+        intended.id != current?.id &&
+        (intended.isDone || (current?.isDone ?? false));
+
     await _guard(() async {
       await widget.repository.updateTaskProgress(
         task,
         progress,
-        // Dragging to either end moves the status with it, using this board's
-        // own labels.
-        statuses: _selectedBoard?.statuses ?? const [],
+        // Empty on purpose when the move needs reviewing: the repository would
+        // otherwise write the status itself and the dialog would never open.
+        statuses: crossesReview ? const [] : statuses,
       );
       await _refreshSelectedBoard();
     }, failureMessage: 'Could not update the progress.');
+
+    if (!crossesReview || !mounted) {
+      return;
+    }
+
+    // Re-read the task before handing it on: _changeStatus compares against
+    // the status it is moving from, and the row it was given is now stale by
+    // one write.
+    final moved = _selectedBoard?.taskById(task.id) ?? task;
+    await _changeStatus(moved, intended);
   }
 
   Future<void> _reorderTask(TaskGroup group, int oldIndex, int newIndex) async {

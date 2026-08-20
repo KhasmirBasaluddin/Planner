@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:planner/models/planner_models.dart';
 
@@ -88,53 +86,12 @@ void main() {
     });
 
     test('a missing body reads as empty rather than throwing', () {
-      // A note can be nothing but attachments.
       final note = TaskNote.fromMap({
         'id': 'n6',
         'task_id': 't1',
         'created_at': '2026-08-20T09:00:00Z',
       });
       expect(note.body, '');
-    });
-  });
-
-  group('attachments', () {
-    NoteAttachment attachment(int bytes, [String type = 'image/png']) {
-      return NoteAttachment.fromMap({
-        'id': 'a1',
-        'note_id': 'n1',
-        'storage_path': 'ws/task/uuid-photo.png',
-        'file_name': 'photo.png',
-        'content_type': type,
-        'byte_size': bytes,
-      });
-    }
-
-    test('images are flagged so they can preview inline', () {
-      expect(attachment(100).isImage, isTrue);
-      expect(attachment(100, 'application/pdf').isImage, isFalse);
-    });
-
-    test('sizes read the way a person would say them', () {
-      expect(attachment(512).readableSize, '512 B');
-      expect(attachment(2048).readableSize, '2 KB');
-      expect(attachment(3 * 1024 * 1024).readableSize, '3.0 MB');
-    });
-
-    test('a zero-byte file still reports a size', () {
-      expect(attachment(0).readableSize, '0 B');
-    });
-  });
-
-  group('pending uploads', () {
-    test('report their size before anything is uploaded', () {
-      final upload = NoteUpload(
-        fileName: 'shot.jpg',
-        bytes: Uint8List(4096),
-        contentType: 'image/jpeg',
-      );
-      expect(upload.readableSize, '4 KB');
-      expect(upload.isImage, isTrue);
     });
   });
 
