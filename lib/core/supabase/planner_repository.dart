@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -174,6 +177,39 @@ class PlannerRepository {
         .from('profiles')
         .update({'full_name': fullName.trim()})
         .eq('id', userId);
+
+    // Keep the auth metadata in step. It is what seeds the navbar on the very
+    // first frame after a cold start, before the profile row has loaded, so
+    // leaving it stale means the old name flashes on every launch.
+    try {
+      await _client.auth.updateUser(
+        UserAttributes(data: {'full_name': fullName.trim()}),
+      );
+    } catch (_) {
+      // The profile row is the name teammates actually see and it is already
+      // saved. A failure here is cosmetic and must not report the change as
+      // having failed.
+    }
+  }
+
+  /// Whether the display name can be changed right now, and when it can be if
+  /// not.
+  ///
+  /// The seven-day cooldown is enforced by a trigger in migration 0012; this
+  /// only reads the state so the form can explain itself up front rather than
+  /// letting someone type a new name and then refusing it.
+  Future<NameChangeStatus> nameChangeStatus() async {
+    try {
+      final result = await _client.rpc<dynamic>('my_name_change_status');
+      if (result is Map<String, dynamic>) {
+        return NameChangeStatus.fromMap(result);
+      }
+    } catch (_) {
+      // An older database without 0012 has no cooldown to report. Allowing the
+      // attempt is right: the trigger is the authority, and if it is not there
+      // yet then there is genuinely nothing to wait for.
+    }
+    return const NameChangeStatus(canChangeNow: true, nextAllowedAt: null);
   }
 
   // === Members and invites ===
@@ -1014,6 +1050,243 @@ class PlannerRepository {
     );
   }
 
+  // === Work notes ===
+
+  /// The bucket work-note attachments live in. Private: nothing here is
+  /// readable without a signed URL, which the client asks for per file.
+  static const String attachmentBucket = 'task-attachments';
+
+  /// Matches the CHECK in migration 0013 and the bucket's own limit, so an
+  /// oversized file is refused before it is uploaded rather than after.
+  static const int maxAttachmentBytes = 25 * 1024 * 1024;
+
+  /// A task's work log, oldest first — the order the work happened in.
+  Future<List<TaskNote>> loadNotes(String taskId) async {
+    final rows = await _client
+        .from('task_notes')
+        .select(
+          'id, task_id, kind, body, status_from, status_to, '
+          'edited_at, created_at, '
+          'author:profiles!task_notes_author_id_fkey'
+          '(id, email, full_name, avatar_url)',
+        )
+        .eq('task_id', taskId)
+        .isFilter('deleted_at', null)
+        .order('created_at');
+
+    if (rows.isEmpty) {
+      return [];
+    }
+
+    // One query for every attachment on the task rather than one per note:
+    // a review thread of ten notes would otherwise cost eleven round trips.
+    final files = await _loadAttachments(
+      rows.map((row) => row['id'] as String).toList(),
+    );
+
+    return rows.map((row) {
+      final author = row['author'];
+      final id = row['id'] as String;
+      return TaskNote.fromMap(
+        row,
+        author: author is Map<String, dynamic>
+            ? UserProfile.fromMap(author)
+            : null,
+        attachments: files[id] ?? const [],
+      );
+    }).toList();
+  }
+
+  Future<Map<String, List<NoteAttachment>>> _loadAttachments(
+    List<String> noteIds,
+  ) async {
+    if (noteIds.isEmpty) {
+      return {};
+    }
+    final rows = await _client
+        .from('task_note_attachments')
+        .select('id, note_id, storage_path, file_name, content_type, byte_size')
+        .inFilter('note_id', noteIds)
+        .order('created_at');
+
+    final grouped = <String, List<NoteAttachment>>{};
+    for (final row in rows) {
+      final attachment = NoteAttachment.fromMap(row);
+      grouped.putIfAbsent(attachment.noteId, () => []).add(attachment);
+    }
+    return grouped;
+  }
+
+  /// Writes a note, then attaches whatever files came with it.
+  ///
+  /// The note row is created first because the attachment policy checks that
+  /// the caller owns the note it is attaching to — so the note has to exist,
+  /// and it has to be theirs, before any file can be linked.
+  ///
+  /// [statusFrom] and [statusTo] record the move this note explains. Stored as
+  /// names rather than ids: a label can be renamed or deleted afterwards, and
+  /// the note has to keep saying what actually happened at the time.
+  Future<String> addNote({
+    required String taskId,
+    required String workspaceId,
+    required String body,
+    TaskNoteKind kind = TaskNoteKind.update,
+    String? statusFrom,
+    String? statusTo,
+    List<NoteUpload> uploads = const [],
+  }) async {
+    final userId = _uid;
+    if (userId == null) {
+      throw StateError('Not signed in.');
+    }
+
+    final row = await _client
+        .from('task_notes')
+        .insert({
+          'task_id': taskId,
+          'workspace_id': workspaceId,
+          'author_id': userId,
+          'kind': kind.wire,
+          'body': body.trim(),
+          'status_from': statusFrom,
+          'status_to': statusTo,
+        })
+        .select('id')
+        .single();
+
+    final noteId = row['id'] as String;
+
+    for (final upload in uploads) {
+      await _attach(
+        noteId: noteId,
+        taskId: taskId,
+        workspaceId: workspaceId,
+        upload: upload,
+      );
+    }
+
+    return noteId;
+  }
+
+  /// Uploads one file and records it against a note.
+  ///
+  /// The path leads with the workspace id because the storage policy reads it
+  /// straight out of the object name — `(storage.foldername(name))[1]` — to
+  /// decide whether the caller is a member. A uuid prefix on the filename
+  /// keeps two people uploading `photo.jpg` from overwriting each other.
+  Future<void> _attach({
+    required String noteId,
+    required String taskId,
+    required String workspaceId,
+    required NoteUpload upload,
+  }) async {
+    if (upload.bytes.length > maxAttachmentBytes) {
+      throw StateError('${upload.fileName} is larger than 25 MB.');
+    }
+
+    final safeName = upload.fileName
+        .replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_')
+        .replaceAll(RegExp(r'_+'), '_');
+    final path = '$workspaceId/$taskId/${_randomId()}-$safeName';
+
+    await _client.storage
+        .from(attachmentBucket)
+        .uploadBinary(
+          path,
+          upload.bytes,
+          fileOptions: FileOptions(contentType: upload.contentType),
+        );
+
+    await _client.from('task_note_attachments').insert({
+      'note_id': noteId,
+      'task_id': taskId,
+      'workspace_id': workspaceId,
+      'storage_path': path,
+      'file_name': upload.fileName,
+      'content_type': upload.contentType,
+      'byte_size': upload.bytes.length,
+    });
+  }
+
+  /// A short-lived URL for one attachment.
+  ///
+  /// The bucket is private, so there is no permanent address to link to. An
+  /// hour is long enough to open a file and short enough that a URL pasted
+  /// somewhere it should not be stops working.
+  Future<String> attachmentUrl(NoteAttachment attachment) {
+    return _client.storage
+        .from(attachmentBucket)
+        .createSignedUrl(attachment.storagePath, 3600);
+  }
+
+  /// The raw bytes, for previewing an image inline.
+  Future<Uint8List> attachmentBytes(NoteAttachment attachment) {
+    return _client.storage
+        .from(attachmentBucket)
+        .download(attachment.storagePath);
+  }
+
+  Future<void> editNote({required String noteId, required String body}) async {
+    await _client
+        .from('task_notes')
+        .update({
+          'body': body.trim(),
+          'edited_at': DateTime.now().toIso8601String(),
+        })
+        .eq('id', noteId);
+  }
+
+  /// Soft delete, matching everything else here: the note leaves the timeline
+  /// but the row survives, so a deleted verdict is still recoverable.
+  Future<void> deleteNote(String noteId) async {
+    await _client
+        .from('task_notes')
+        .update({'deleted_at': DateTime.now().toIso8601String()})
+        .eq('id', noteId);
+  }
+
+  /// Watches one task's work log.
+  RealtimeChannel subscribeToTaskNotes({
+    required String taskId,
+    required VoidCallback onChange,
+    VoidCallback? onResync,
+  }) {
+    return _client
+        .channel('task-notes:$taskId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'task_notes',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'task_id',
+            value: taskId,
+          ),
+          callback: (_) => onChange(),
+        )
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'task_note_attachments',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'task_id',
+            value: taskId,
+          ),
+          callback: (_) => onChange(),
+        )
+        .subscribe(_resyncOnResubscribe(onResync ?? onChange));
+  }
+
+  /// Cheap unique-enough prefix for a storage path. Not security-bearing —
+  /// the bucket is private and RLS decides access; this only keeps two
+  /// uploads of the same filename apart.
+  String _randomId() {
+    final now = DateTime.now().microsecondsSinceEpoch.toRadixString(36);
+    final salt = identityHashCode(Object()).toRadixString(36);
+    return '$now$salt';
+  }
+
   // === Recycle bin ===
 
   Future<Map<String, dynamic>> loadDeletedItems(String workspaceId) async {
@@ -1468,7 +1741,10 @@ class PlannerRepository {
   /// Filtered on user_id server-side: notifications are the one table where
   /// every row belongs to exactly one person, so there is no reason to receive
   /// anyone else's traffic.
-  RealtimeChannel subscribeToNotifications({required VoidCallback onChange}) {
+  RealtimeChannel subscribeToNotifications({
+    required VoidCallback onChange,
+    VoidCallback? onResync,
+  }) {
     final userId = _uid;
     if (userId == null) {
       throw StateError('Not signed in.');
@@ -1486,7 +1762,7 @@ class PlannerRepository {
           ),
           callback: (_) => onChange(),
         )
-        .subscribe();
+        .subscribe(_resyncOnResubscribe(onResync ?? onChange));
   }
 
   // === Realtime ===
@@ -1500,6 +1776,10 @@ class PlannerRepository {
     /// wider than one board (a board added or removed) and the whole
     /// workspace has to be re-read.
     required void Function(String? boardId) onChange,
+
+    /// Called when the socket returns after a drop, so the caller can re-read
+    /// everything rather than trust it saw every event in between.
+    VoidCallback? onResync,
   }) {
     var channel = _client.channel('workspace:$workspaceId');
 
@@ -1565,7 +1845,9 @@ class PlannerRepository {
       callback: (payload) => onChange(boardOf(payload)),
     );
 
-    return channel.subscribe();
+    return channel.subscribe(
+      _resyncOnResubscribe(onResync ?? () => onChange(null)),
+    );
   }
 
   /// Watches who is in a workspace: joins by code, invitations, role changes and
@@ -1574,6 +1856,7 @@ class PlannerRepository {
   RealtimeChannel subscribeToTeam({
     required String workspaceId,
     required VoidCallback onChange,
+    VoidCallback? onResync,
   }) {
     return _client
         .channel('workspace-team:$workspaceId')
@@ -1608,7 +1891,7 @@ class PlannerRepository {
           table: 'profiles',
           callback: (_) => onChange(),
         )
-        .subscribe();
+        .subscribe(_resyncOnResubscribe(onResync ?? onChange));
   }
 
   /// Watches one task's chat, so an open thread updates as teammates post.
@@ -1618,6 +1901,7 @@ class PlannerRepository {
   RealtimeChannel subscribeToTaskChat({
     required String taskId,
     required VoidCallback onChange,
+    VoidCallback? onResync,
   }) {
     return _client
         .channel('task-chat:$taskId')
@@ -1646,7 +1930,7 @@ class PlannerRepository {
           ),
           callback: (_) => onChange(),
         )
-        .subscribe();
+        .subscribe(_resyncOnResubscribe(onResync ?? onChange));
   }
 
   /// When each member last had this task's chat open, keyed by user id.
@@ -1680,6 +1964,7 @@ class PlannerRepository {
   RealtimeChannel subscribeToChatReads({
     required String taskId,
     required VoidCallback onChange,
+    VoidCallback? onResync,
   }) {
     return _client
         .channel('task-chat-reads:$taskId')
@@ -1694,7 +1979,7 @@ class PlannerRepository {
           ),
           callback: (_) => onChange(),
         )
-        .subscribe();
+        .subscribe(_resyncOnResubscribe(onResync ?? onChange));
   }
 
   /// Watches for invitations addressed to the signed-in user, so the navbar
@@ -1704,7 +1989,10 @@ class PlannerRepository {
   /// they are addressed by email, and the row carries no user_id until it is
   /// accepted — so that half stays broad and RLS decides what is readable.
   /// The callback only triggers a reload, which returns their own invites.
-  RealtimeChannel subscribeToMyInvites({required VoidCallback onChange}) {
+  RealtimeChannel subscribeToMyInvites({
+    required VoidCallback onChange,
+    VoidCallback? onResync,
+  }) {
     final userId = _uid;
     var channel = _client
         .channel('my-invites')
@@ -1732,11 +2020,43 @@ class PlannerRepository {
       callback: (_) => onChange(),
     );
 
-    return channel.subscribe();
+    return channel.subscribe(_resyncOnResubscribe(onResync ?? onChange));
   }
 
   Future<void> unsubscribe(RealtimeChannel channel) async {
     await _client.removeChannel(channel);
+  }
+
+  /// Re-reads data after the realtime socket has been away.
+  ///
+  /// This is the piece that makes "live" survive contact with a real laptop.
+  /// Postgres changes are pushed, never replayed: anything that happened while
+  /// the socket was down — a teammate's invitation, a task moved, a message
+  /// posted — is simply never delivered, and the client keeps showing stale
+  /// data with no idea it is stale. That is what closing and reopening the app
+  /// was really fixing.
+  ///
+  /// A desktop app disconnects constantly: the lid closes, wifi roams, a VPN
+  /// flips, the machine suspends. So every subscription here reports when it
+  /// (re)subscribes, and the callers resync at that moment rather than
+  /// trusting that nothing happened while they were not listening.
+  ///
+  /// The first `subscribed` is the app starting up, which has already loaded
+  /// its data — so only the second and later ones mean "you may have missed
+  /// something".
+  static void Function(RealtimeSubscribeStatus, Object?) _resyncOnResubscribe(
+    VoidCallback? onResync,
+  ) {
+    var seenFirst = false;
+    return (status, _) {
+      if (status != RealtimeSubscribeStatus.subscribed) {
+        return;
+      }
+      if (seenFirst) {
+        onResync?.call();
+      }
+      seenFirst = true;
+    };
   }
 
   // === Helpers ===

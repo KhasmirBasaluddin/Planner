@@ -1,15 +1,20 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show RealtimeChannel;
 
 import '../../core/notifications/desktop_toast.dart';
 import '../../core/supabase/auth_service.dart';
 import '../../core/supabase/planner_repository.dart';
+import '../../core/updates/release_notes.dart';
+import '../../shared/widgets/whats_new_dialog.dart';
 import '../../models/board_filter.dart';
 import '../../models/planner_models.dart';
 import '../../shared/utils/planner_colors.dart';
+import '../workspace/account_dialog.dart';
+import '../workspace/deleted_items_dialog.dart';
 import '../workspace/join_workspace_dialog.dart';
 import '../workspace/members_dialog.dart';
 import 'widgets/app_navbar.dart';
@@ -20,8 +25,9 @@ import 'widgets/board_kanban.dart';
 import 'widgets/board_table.dart';
 import 'widgets/board_toolbar.dart';
 import 'widgets/planner_dialogs.dart';
+import 'widgets/notifications_page.dart';
 import 'widgets/planner_sidebar.dart';
-import 'widgets/send_back_dialog.dart';
+import 'widgets/review_dialog.dart';
 
 class PlannerPage extends StatefulWidget {
   const PlannerPage({super.key, required this.auth, required this.repository});
@@ -33,7 +39,8 @@ class PlannerPage extends StatefulWidget {
   State<PlannerPage> createState() => _PlannerPageState();
 }
 
-class _PlannerPageState extends State<PlannerPage> {
+class _PlannerPageState extends State<PlannerPage>
+    with WidgetsBindingObserver {
   final TextEditingController _searchController = TextEditingController();
   final Set<String> _collapsedGroupIds = <String>{};
 
@@ -95,6 +102,15 @@ class _PlannerPageState extends State<PlannerPage> {
   BoardSearch? _groupsSearch;
   TaskOrder? _groupsOrder;
   List<TaskGroup>? _groupsCache;
+
+  /// Swaps the board for the full notification history, in place. A route of
+  /// its own hid the sidebar and navbar, which made it read as a different
+  /// application rather than another view of this one.
+  bool _showingNotifications = false;
+
+  /// Drives the navbar's refresh button, and the "updated Xm ago" it reports.
+  bool _manualRefreshing = false;
+  DateTime? _lastSyncedAt;
 
   /// Icons-only sidebar by user choice, remembered across launches. Narrow
   /// windows still force the compact rail regardless of this.
@@ -430,8 +446,36 @@ class _PlannerPageState extends State<PlannerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _bootstrap();
     _loadSidebarPreference();
+  }
+
+  /// Resyncs when the window is brought back to the foreground.
+  ///
+  /// A suspended machine keeps a socket that looks open but has been dead for
+  /// hours, and the reconnect can take a moment to be noticed. Rather than
+  /// wait for it, coming back to the app re-reads everything — which is what
+  /// the user was previously getting by quitting and relaunching.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _resyncEverything();
+    }
+  }
+
+  /// Re-reads every live surface this page owns: the bell, the invitations,
+  /// and the board itself. Used after any gap in the realtime stream, where
+  /// the missed events are gone for good and only a fresh read can tell what
+  /// actually changed.
+  void _resyncEverything() {
+    if (!mounted) {
+      return;
+    }
+    unawaited(_loadInvites());
+    unawaited(_loadNotifications());
+    unawaited(_loadMyProfile());
+    _scheduleRefresh(null);
   }
 
   Future<void> _loadSidebarPreference() async {
@@ -450,6 +494,7 @@ class _PlannerPageState extends State<PlannerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _highlightTimer?.cancel();
     _refreshDebounce?.cancel();
     _searchController.dispose();
@@ -484,6 +529,10 @@ class _PlannerPageState extends State<PlannerPage> {
           _loadInvites();
         }
       },
+      // An invitation sent while this client was offline is never pushed —
+      // the event is gone. Re-reading on reconnect is what stops "they had to
+      // close and reopen the app to see it".
+      onResync: _resyncEverything,
     );
     _notificationChannel = widget.repository.subscribeToNotifications(
       onChange: () {
@@ -491,6 +540,7 @@ class _PlannerPageState extends State<PlannerPage> {
           _loadNotifications();
         }
       },
+      onResync: _resyncEverything,
     );
     try {
       final workspaces = await widget.repository.loadWorkspaces();
@@ -577,6 +627,7 @@ class _PlannerPageState extends State<PlannerPage> {
       // is coalesced into a single fetch, and that fetch pulls back only the
       // boards actually touched rather than the whole workspace.
       onChange: _scheduleRefresh,
+      onResync: _resyncEverything,
     );
   }
 
@@ -1477,6 +1528,103 @@ class _PlannerPageState extends State<PlannerPage> {
     }
   }
 
+  /// Your own account: display name and password.
+  ///
+  /// A name change ripples through every board and comment, so the profile and
+  /// the member lists are re-read afterwards rather than patched locally.
+  Future<void> _openAccount() async {
+    final changed = await showAccountDialog(
+      context,
+      auth: widget.auth,
+      repository: widget.repository,
+      currentName: _myProfileName,
+    );
+    if (changed == true && mounted) {
+      await _loadMyProfile();
+      await _loadWorkspaceData();
+    }
+  }
+
+  /// Re-reads everything on demand — the safety net behind realtime.
+  ///
+  /// Realtime should make this unnecessary, but a socket that died quietly
+  /// looks exactly like a board where nothing has happened. Rather than expect
+  /// anyone to diagnose that, this re-reads the workspace, the boards, the
+  /// members and the bell in one go.
+  ///
+  /// Deliberately not debounced like [_scheduleRefresh]: this one was asked
+  /// for by a person who is watching, so it runs now.
+  Future<void> _manualRefresh() async {
+    if (_manualRefreshing) {
+      return;
+    }
+    setState(() => _manualRefreshing = true);
+    try {
+      await _loadWorkspaceData();
+      await Future.wait([
+        _loadInvites(),
+        _loadNotifications(),
+        _loadMyProfile(),
+      ]);
+      if (mounted) {
+        setState(() => _lastSyncedAt = DateTime.now());
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _manualRefreshing = false);
+      }
+    }
+  }
+
+  /// Shows the full notification history in the content area, keeping the
+  /// sidebar and navbar where they are.
+  /// The recycle bin. Restoring anything re-reads the board, since a restored
+  /// task reappears in a group that may itself have just come back with it.
+  Future<void> _openDeletedItems() async {
+    final workspace = _workspace;
+    if (workspace == null) {
+      return;
+    }
+    final restored = await showDeletedItemsDialog(
+      context,
+      repository: widget.repository,
+      workspace: workspace,
+    );
+    if (restored == true && mounted) {
+      await _loadWorkspaceData();
+    }
+  }
+
+  /// Reopens the release notes for the running version.
+  ///
+  /// The startup dialog only appears once per update, and "what changed
+  /// again?" is a fair question a week later.
+  Future<void> _showWhatsNew() async {
+    final version = (await PackageInfo.fromPlatform()).version;
+    final notes = notesFor(version);
+    if (!mounted) {
+      return;
+    }
+    if (notes == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('No release notes for version $version.')),
+        );
+      return;
+    }
+    await showReleaseNotes(context, notes);
+  }
+
+  void _openAllNotifications() {
+    setState(() => _showingNotifications = true);
+  }
+
+  void _closeAllNotifications() {
+    setState(() => _showingNotifications = false);
+    unawaited(_loadNotifications());
+  }
+
   Future<void> _signOut() async {
     final confirmed = await showDeleteConfirmDialog(
       context: context,
@@ -1777,49 +1925,148 @@ class _PlannerPageState extends State<PlannerPage> {
     }, failureMessage: 'Could not delete the task.');
   }
 
+  /// Whether the signed-in user may pass judgement on someone else's work.
+  ///
+  /// Submitting is anyone's job; approving and sending back are a supervisor's.
+  /// Without the split a member could mark their own work done and immediately
+  /// approve it, which makes the whole review loop decorative. Migration 0013
+  /// enforces the same rule server-side — this only decides what to offer.
+  bool get _canReview => _workspace?.role.canManageMembers ?? false;
+
+  /// Everywhere finished work can be sent back to: every label on the board
+  /// that is not a done label.
+  ///
+  /// Read from the flags rather than the names. Boards define their own
+  /// statuses and rename them freely, so a board whose done column is called
+  /// "Shipped" has to work exactly the same.
+  List<StatusLabel> get _sendBackTargets =>
+      (_selectedBoard?.statuses ?? const [])
+          .where((status) => !status.isDone)
+          .toList();
+
+  /// The status change, and the review loop hanging off it.
+  ///
+  /// Three cases, all funnelled through here because every view — table,
+  /// kanban and calendar — already routes its status changes to this one
+  /// method:
+  ///
+  ///   * into a done status  → the assignee is submitting work
+  ///   * out of a done status → a reviewer is sending it back
+  ///   * anything else        → an ordinary move, no ceremony
   Future<void> _changeStatus(PlannerTask task, StatusLabel status) async {
     if (!_requireEditor()) {
       return;
     }
 
-    final previous = _selectedBoard?.statusById(task.statusId);
+    final workspaceId = _workspace?.id;
+    if (workspaceId == null) {
+      return;
+    }
 
-    // Pulling finished work back is the one status change that needs a word
-    // of explanation — see showSendBackDialog. Cancelling there cancels the
-    // whole move, so a mis-drag costs nothing.
-    var comment = '';
-    if (previous != null && previous.isDone && !status.isDone) {
-      final decision = await showSendBackDialog(
+    final previous = _selectedBoard?.statusById(task.statusId);
+    final submitting = status.isDone && !(previous?.isDone ?? false);
+    final sendingBack = (previous?.isDone ?? false) && !status.isDone;
+
+    // Reopening finished work is a verdict on somebody else's effort, so it
+    // needs the right to manage the team. Refused here rather than letting the
+    // database throw, which would land as an opaque failure after the drag.
+    if (sendingBack && !_canReview) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Only an admin or the owner can send finished work back.',
+            ),
+          ),
+        );
+      return;
+    }
+
+    var target = status;
+    ReviewDecision? decision;
+
+    if (submitting || sendingBack) {
+      decision = await showReviewDialog(
         context: context,
         task: task,
+        kind: submitting ? ReviewKind.submit : ReviewKind.sendBack,
         from: previous,
         to: status,
+        targets: sendingBack ? _sendBackTargets : const [],
+        members: sendingBack ? _members : const [],
+        currentAssignees: task.assigneeIds,
       );
+      // Cancelling the dialog cancels the whole move, so a mis-drag costs
+      // nothing.
       if (decision == null) {
         return;
       }
-      comment = decision.comment;
+      target = decision.target ?? status;
     }
 
+    final settled = decision;
     await _guard(() async {
       await widget.repository.updateTaskStatus(
         task,
-        status,
+        target,
         // Passed so the activity entry can read "Working -> Done" rather than
         // just naming where it landed.
         previous: previous,
       );
-      if (comment.isNotEmpty) {
-        // Into the existing chat rather than a channel of its own: the
-        // send-back prefix keeps it identifiable, and the people watching the
-        // task already watch its chat.
-        await widget.repository.addComment(
+
+      if (settled != null) {
+        // The note records the move it explains. Status *names* rather than
+        // ids: a label can be renamed or deleted afterwards, and the log has
+        // to keep saying what actually happened at the time.
+        await widget.repository.addNote(
           taskId: task.id,
-          body: 'Sent back to ${status.name}: $comment',
+          workspaceId: workspaceId,
+          body: settled.body,
+          kind: submitting ? TaskNoteKind.submission : TaskNoteKind.rejection,
+          statusFrom: previous?.name,
+          statusTo: target.name,
+          uploads: settled.uploads,
         );
+
+        // Only when the reviewer actually changed it. Null means "leave it
+        // with whoever has it", which is what most rejections mean.
+        final reassign = settled.reassignTo;
+        if (reassign != null) {
+          await widget.repository.setTaskAssignees(
+            taskId: task.id,
+            userIds: reassign,
+          );
+        }
       }
+
       await _refreshSelectedBoard();
     }, failureMessage: 'Could not update the status.');
+  }
+
+  /// Signs off on submitted work.
+  ///
+  /// Leaves the status where it is — the task is already done — and writes an
+  /// approval to the log, which is what closes the loop for whoever submitted
+  /// it. Offered only to reviewers.
+  Future<void> _approveWork(PlannerTask task) async {
+    final workspaceId = _workspace?.id;
+    if (workspaceId == null || !_canReview) {
+      return;
+    }
+    final status = _selectedBoard?.statusById(task.statusId);
+
+    await _guard(() async {
+      await widget.repository.addNote(
+        taskId: task.id,
+        workspaceId: workspaceId,
+        body: '',
+        kind: TaskNoteKind.approval,
+        statusFrom: status?.name,
+        statusTo: status?.name,
+      );
+      await _refreshSelectedBoard();
+    }, failureMessage: 'Could not approve this work.');
   }
 
   Future<void> _changeProgress(PlannerTask task, double progress) async {
@@ -1951,7 +2198,12 @@ class _PlannerPageState extends State<PlannerPage> {
     // attached in two places crashes the frame.
   }
 
-  Future<void> _openChat(PlannerTask task) async {
+  /// Opens a task's discussion, or its work log when [notes] is set.
+  Future<void> _openChat(PlannerTask task, {bool notes = false}) async {
+    final workspaceId = _workspace?.id;
+    if (workspaceId == null) {
+      return;
+    }
     await showTaskChatDialog(
       context: context,
       task: task,
@@ -1959,9 +2211,19 @@ class _PlannerPageState extends State<PlannerPage> {
       members: _members,
       currentUserId: widget.auth.currentUser?.id ?? '',
       canEdit: _canEdit,
+      workspaceId: workspaceId,
+      statuses: _selectedBoard?.statuses ?? const [],
+      openNotes: notes,
+      // A note changes the badge on the row behind the dialog, so the board
+      // is re-read while it is still open rather than only on close.
+      onNotesChanged: () => unawaited(_refreshSelectedBoard()),
+      onApproveWork: _canReview ? () => unawaited(_approveWork(task)) : null,
     );
     await _refreshBoards();
   }
+
+  /// Straight to the work log, from the notes badge on a row or card.
+  Future<void> _openNotes(PlannerTask task) => _openChat(task, notes: true);
 
   void _toggleGroup(TaskGroup group) {
     setState(() {
@@ -1999,6 +2261,7 @@ class _PlannerPageState extends State<PlannerPage> {
                 onJoinWorkspace: _joinWorkspace,
                 onRenameWorkspace: _renameWorkspace,
                 onManageMembers: _manageMembers,
+                onOpenDeletedItems: _openDeletedItems,
                 onLeaveWorkspace: _leaveWorkspace,
                 onDeleteWorkspace: _deleteWorkspace,
                 onSignOut: _signOut,
@@ -2029,6 +2292,12 @@ class _PlannerPageState extends State<PlannerPage> {
                       onMarkAllRead: _markAllNotificationsRead,
                       onAcceptInvite: _acceptInvite,
                       onDeclineInvite: _declineInvite,
+                      onOpenAccount: _openAccount,
+                      onSeeAllNotifications: _openAllNotifications,
+                      onWhatsNew: _showWhatsNew,
+                      onRefresh: _manualRefresh,
+                      refreshing: _manualRefreshing,
+                      lastSyncedAt: _lastSyncedAt,
                     ),
                     // Between the navbar and the board, so it frames everything below it.
                     // Reappears whenever the set of pressing tasks changes —
@@ -2053,10 +2322,24 @@ class _PlannerPageState extends State<PlannerPage> {
                           );
                         },
                       ),
+                    // The notification history takes over the content area
+                    // only — the board is still one click away in the sidebar.
+                    if (_showingNotifications)
+                      Expanded(
+                        child: NotificationsView(
+                          repository: widget.repository,
+                          onOpen: (notification) {
+                            _closeAllNotifications();
+                            _openNotification(notification);
+                          },
+                          onMarkAllRead: _markAllNotificationsRead,
+                          onClose: _closeAllNotifications,
+                        ),
+                      )
                     // A brand-new account has no workspace yet. The welcome
                     // sits in the content area so the sidebar stays visible and
                     // the layout does not jump once a workspace exists.
-                    if (!_loading && _error == null && _workspaces.isEmpty)
+                    else if (!_loading && _error == null && _workspaces.isEmpty)
                       Expanded(
                         child: FirstRunWelcome(
                           onGetStarted: _setUpFirstWorkspace,
@@ -2111,6 +2394,7 @@ class _PlannerPageState extends State<PlannerPage> {
                           onStatusChanged: _changeStatus,
                           onProgressChanged: _changeProgress,
                           onOpenChat: _openChat,
+                          onOpenNotes: _openNotes,
                           onTaskReorder: _reorderTask,
                         ),
                       ),
@@ -2162,6 +2446,7 @@ class _PlannerContent extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     required this.onTaskReorder,
     this.highlightedTaskId,
   });
@@ -2207,6 +2492,7 @@ class _PlannerContent extends StatelessWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+  final ValueChanged<PlannerTask> onOpenNotes;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -2285,6 +2571,7 @@ class _PlannerContent extends StatelessWidget {
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
                 onOpenChat: onOpenChat,
+                onOpenNotes: onOpenNotes,
                 // Disabled while grouped: the groups on screen are synthetic
                 // buckets, so a drag has no real group to write a position
                 // back to. Ordering is whatever Group By implies instead.
@@ -2307,6 +2594,7 @@ class _PlannerContent extends StatelessWidget {
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
                 onOpenChat: onOpenChat,
+                onOpenNotes: onOpenNotes,
               ),
               ViewMode.calendar => BoardCalendar(
                 key: ValueKey(
@@ -2321,6 +2609,7 @@ class _PlannerContent extends StatelessWidget {
                 onStatusChanged: onStatusChanged,
                 onProgressChanged: onProgressChanged,
                 onOpenChat: onOpenChat,
+                onOpenNotes: onOpenNotes,
               ),
               // Timeline, Gantt and Chart are accepted by the database so a
               // saved view can outlive the client, but nothing renders them

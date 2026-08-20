@@ -20,6 +20,12 @@ class AppNavbar extends StatelessWidget {
     required this.onDeclineInvite,
     required this.onOpenNotification,
     required this.onMarkAllRead,
+    required this.onOpenAccount,
+    required this.onSeeAllNotifications,
+    required this.onWhatsNew,
+    required this.onRefresh,
+    required this.refreshing,
+    this.lastSyncedAt,
   });
 
   final String fullName;
@@ -34,6 +40,23 @@ class AppNavbar extends StatelessWidget {
   final ValueChanged<AppNotification> onOpenNotification;
   final VoidCallback onMarkAllRead;
 
+  /// The account panel — display name and password.
+  final VoidCallback onOpenAccount;
+
+  /// Opens the full notification history, for when the panel's recent slice is
+  /// not enough.
+  final VoidCallback onSeeAllNotifications;
+
+  /// Reopens the release notes on demand.
+  final VoidCallback onWhatsNew;
+
+  /// Re-reads everything by hand.
+  final VoidCallback onRefresh;
+  final bool refreshing;
+
+  /// When the last successful read finished, for the tooltip.
+  final DateTime? lastSyncedAt;
+
   @override
   Widget build(BuildContext context) {
     // White, and without a logo: the sidebar beside it already carries the
@@ -47,6 +70,16 @@ class AppNavbar extends StatelessWidget {
       ),
       child: Row(
         children: [
+          // A safety net, not the normal path. Realtime should mean nobody
+          // ever needs this — but a dropped socket looks exactly like "nothing
+          // has happened", and on an operational board the cost of quietly
+          // stale data is high. One obvious button beats teaching people to
+          // restart the app.
+          _RefreshButton(
+            onPressed: onRefresh,
+            refreshing: refreshing,
+            lastSyncedAt: lastSyncedAt,
+          ),
           const Spacer(),
           _NotificationBell(
             invites: invites,
@@ -55,9 +88,16 @@ class AppNavbar extends StatelessWidget {
             onDecline: onDeclineInvite,
             onOpen: onOpenNotification,
             onMarkAllRead: onMarkAllRead,
+            onSeeAll: onSeeAllNotifications,
           ),
           const SizedBox(width: 14),
-          _AccountChip(fullName: fullName, email: email),
+          _AccountChip(
+            fullName: fullName,
+            email: email,
+            onOpenAccount: onOpenAccount,
+            onSeeAllNotifications: onSeeAllNotifications,
+            onWhatsNew: onWhatsNew,
+          ),
         ],
       ),
     );
@@ -67,79 +107,528 @@ class AppNavbar extends StatelessWidget {
 /// Name over email, with an avatar. Enough room here to show both, which is
 /// what the sidebar could not do.
 class _AccountChip extends StatelessWidget {
-  const _AccountChip({required this.fullName, required this.email});
+  const _AccountChip({
+    required this.fullName,
+    required this.email,
+    required this.onOpenAccount,
+    required this.onSeeAllNotifications,
+    required this.onWhatsNew,
+  });
 
   final String fullName;
   final String email;
+  final VoidCallback onOpenAccount;
+  final VoidCallback onSeeAllNotifications;
+  final VoidCallback onWhatsNew;
 
   @override
   Widget build(BuildContext context) {
     final name = fullName.trim().isEmpty ? _localPart(email) : fullName.trim();
 
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 30,
-          height: 30,
-          // Fixed so it never squashes into an oval next to a long name.
-          decoration: BoxDecoration(
-            color: avatarColor(email),
-            shape: BoxShape.circle,
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            name.characters.first.toUpperCase(),
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+    // A menu rather than a plain label: this is the corner every desktop app
+    // puts "things about me" in. Signing out is deliberately not here — it
+    // stays at the foot of the sidebar, away from the things you click often.
+    return MenuAnchor(
+      // Anchored to the chip's bottom-right, then pulled back by its own
+      // width, so the panel's right edge lines up with the chip's whatever the
+      // name's length. A fixed offset from the left edge cannot do that: the
+      // chip is as wide as the name inside it, so the menu drifted further
+      // left the longer the name got.
+      alignmentOffset: const Offset(-_accountMenuWidth, 6),
+      style: MenuStyle(
+        alignment: Alignment.bottomRight,
+        backgroundColor: WidgetStateProperty.all(Colors.transparent),
+        elevation: WidgetStateProperty.all(0),
+        padding: WidgetStateProperty.all(EdgeInsets.zero),
+        fixedSize: WidgetStateProperty.all(
+          const Size.fromWidth(_accountMenuWidth),
         ),
-        const SizedBox(width: 9),
-        // Capped and ellipsized: a long display name or email would otherwise
-        // grow the chip until it pushed itself off the edge of the bar.
-        ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 220),
-          child: Tooltip(
-            message: name == email ? email : '$name — $email',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: plannerInk,
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    height: 1.2,
-                  ),
-                ),
-                Text(
-                  email,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    color: plannerMuted,
-                    fontSize: 11,
-                    height: 1.25,
-                  ),
-                ),
-              ],
-            ),
-          ),
+      ),
+      menuChildren: [
+        _AccountMenu(
+          name: name,
+          email: email,
+          onOpenAccount: onOpenAccount,
+          onSeeAllNotifications: onSeeAllNotifications,
+          onWhatsNew: onWhatsNew,
         ),
       ],
+      builder: (context, controller, child) => _ChipButton(
+        open: controller.isOpen,
+        onTap: () => controller.isOpen ? controller.close() : controller.open(),
+        child: child!,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            // Fixed so it never squashes into an oval next to a long name.
+            decoration: BoxDecoration(
+              color: avatarColor(email),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              name.characters.first.toUpperCase(),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          const SizedBox(width: 9),
+          // Capped and ellipsized: a long display name or email would otherwise
+          // grow the chip until it pushed itself off the edge of the bar.
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 220),
+            child: Tooltip(
+              message: name == email ? email : '$name — $email',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: plannerInk,
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      height: 1.2,
+                    ),
+                  ),
+                  Text(
+                    email,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: plannerMuted,
+                      fontSize: 11,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          const Icon(Icons.expand_more_rounded, size: 17, color: plannerMuted),
+        ],
+      ),
     );
   }
 
   static String _localPart(String email) {
     final at = email.indexOf('@');
     return at > 0 ? email.substring(0, at) : email;
+  }
+}
+
+/// Opens the full notification history, at the foot of the panel.
+class _SeeAllButton extends StatelessWidget {
+  const _SeeAllButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onPressed,
+      child: Container(
+        height: 40,
+        alignment: Alignment.center,
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              'See all notifications',
+              style: TextStyle(
+                color: plannerBlue,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(width: 4),
+            Icon(Icons.arrow_forward_rounded, size: 14, color: plannerBlue),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Re-reads the board on demand.
+///
+/// Spins while it works and reports when the data was last known good, so a
+/// press gives an answer either way — pressing it and seeing nothing change is
+/// otherwise indistinguishable from pressing it and having nothing happen.
+class _RefreshButton extends StatefulWidget {
+  const _RefreshButton({
+    required this.onPressed,
+    required this.refreshing,
+    required this.lastSyncedAt,
+  });
+
+  final VoidCallback onPressed;
+  final bool refreshing;
+  final DateTime? lastSyncedAt;
+
+  @override
+  State<_RefreshButton> createState() => _RefreshButtonState();
+}
+
+class _RefreshButtonState extends State<_RefreshButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 850),
+  );
+  bool _hovered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.refreshing) {
+      _spin.repeat();
+    }
+  }
+
+  @override
+  void didUpdateWidget(_RefreshButton old) {
+    super.didUpdateWidget(old);
+    if (widget.refreshing && !_spin.isAnimating) {
+      _spin.repeat();
+    } else if (!widget.refreshing && _spin.isAnimating) {
+      // Finish the turn it is on rather than stopping mid-rotation, which
+      // reads as the refresh having been interrupted.
+      _spin.animateTo(1, duration: const Duration(milliseconds: 220)).then((_) {
+        if (mounted && !widget.refreshing) {
+          _spin.stop();
+          _spin.value = 0;
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _spin.dispose();
+    super.dispose();
+  }
+
+  String get _tooltip {
+    if (widget.refreshing) {
+      return 'Refreshing…';
+    }
+    final at = widget.lastSyncedAt;
+    if (at == null) {
+      return 'Refresh';
+    }
+    final seconds = DateTime.now().difference(at).inSeconds;
+    if (seconds < 10) {
+      return 'Refresh · updated just now';
+    }
+    if (seconds < 60) {
+      return 'Refresh · updated ${seconds}s ago';
+    }
+    final minutes = seconds ~/ 60;
+    if (minutes < 60) {
+      return 'Refresh · updated ${minutes}m ago';
+    }
+    return 'Refresh · updated ${minutes ~/ 60}h ago';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: _tooltip,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        child: GestureDetector(
+          onTap: widget.refreshing ? null : widget.onPressed,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: _hovered ? plannerSurface : Colors.transparent,
+              borderRadius: BorderRadius.circular(radiusSm),
+              border: Border.all(
+                color: _hovered ? plannerBorder : Colors.transparent,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: RotationTransition(
+              turns: _spin,
+              child: Icon(
+                Icons.refresh_rounded,
+                size: 18,
+                color: widget.refreshing
+                    ? plannerBlue
+                    : (_hovered ? plannerInk : plannerMuted),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The account dropdown's width, shared by the menu constraints and the panel
+/// so the two cannot disagree.
+const double _accountMenuWidth = 268;
+
+/// The avatar chip, with a hover and open state so it reads as a control
+/// rather than a label that happens to react.
+class _ChipButton extends StatefulWidget {
+  const _ChipButton({
+    required this.open,
+    required this.onTap,
+    required this.child,
+  });
+
+  final bool open;
+  final VoidCallback onTap;
+  final Widget child;
+
+  @override
+  State<_ChipButton> createState() => _ChipButtonState();
+}
+
+class _ChipButtonState extends State<_ChipButton> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = _hovered || widget.open;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: widget.onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+          decoration: BoxDecoration(
+            color: active ? plannerSurface : Colors.transparent,
+            borderRadius: BorderRadius.circular(radiusMd),
+            border: Border.all(
+              color: active ? plannerBorder : Colors.transparent,
+            ),
+          ),
+          child: widget.child,
+        ),
+      ),
+    );
+  }
+}
+
+/// The dropdown itself: who you are, then what you can do about it.
+class _AccountMenu extends StatelessWidget {
+  const _AccountMenu({
+    required this.name,
+    required this.email,
+    required this.onOpenAccount,
+    required this.onSeeAllNotifications,
+    required this.onWhatsNew,
+  });
+
+  final String name;
+  final String email;
+  final VoidCallback onOpenAccount;
+  final VoidCallback onSeeAllNotifications;
+  final VoidCallback onWhatsNew;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: _accountMenuWidth,
+      decoration: BoxDecoration(
+        color: plannerCard,
+        borderRadius: BorderRadius.circular(radiusLg),
+        border: Border.all(color: plannerBorder),
+        boxShadow: shadowLg,
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Repeating the identity inside the menu is not redundant: the chip
+          // that opened it is now behind an overlay, and on a shared machine
+          // "whose account is this?" is worth answering where the actions are.
+          Container(
+            padding: const EdgeInsets.fromLTRB(14, 13, 14, 13),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [tint(plannerBlue, 0.12), tint(plannerViolet, 0.08)],
+              ),
+              border: const Border(bottom: BorderSide(color: plannerBorder)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: avatarColor(email),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Text(
+                    name.characters.first.toUpperCase(),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerInk,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          height: 1.25,
+                        ),
+                      ),
+                      Text(
+                        email,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: plannerMuted,
+                          fontSize: 11.5,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 5),
+          _AccountMenuItem(
+            icon: Icons.manage_accounts_rounded,
+            label: 'Account settings',
+            detail: 'Display name and password',
+            onPressed: onOpenAccount,
+          ),
+          _AccountMenuItem(
+            icon: Icons.history_rounded,
+            label: 'Notification history',
+            detail: 'Everything you have been sent',
+            onPressed: onSeeAllNotifications,
+          ),
+          _AccountMenuItem(
+            icon: Icons.auto_awesome_rounded,
+            label: "What's new",
+            detail: 'Changes in this version',
+            onPressed: onWhatsNew,
+          ),
+          const SizedBox(height: 5),
+        ],
+      ),
+    );
+  }
+}
+
+/// One row in the account dropdown.
+class _AccountMenuItem extends StatefulWidget {
+  const _AccountMenuItem({
+    required this.icon,
+    required this.label,
+    required this.detail,
+    required this.onPressed,
+  });
+
+  final IconData icon;
+  final String label;
+  final String detail;
+  final VoidCallback onPressed;
+
+  @override
+  State<_AccountMenuItem> createState() => _AccountMenuItemState();
+}
+
+class _AccountMenuItemState extends State<_AccountMenuItem> {
+  bool _hovered = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: GestureDetector(
+        onTap: () {
+          // Close the menu the item lives in before acting, or the dropdown
+          // stays open behind whatever it opened.
+          MenuController.maybeOf(context)?.close();
+          widget.onPressed();
+        },
+        child: Container(
+          color: _hovered ? plannerSurface : Colors.transparent,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          child: Row(
+            children: [
+              Icon(
+                widget.icon,
+                size: 18,
+                color: _hovered ? plannerBlue : plannerMuted,
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.label,
+                      style: TextStyle(
+                        color: _hovered ? plannerBlue : plannerInk,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        height: 1.3,
+                      ),
+                    ),
+                    Text(
+                      widget.detail,
+                      style: const TextStyle(
+                        color: plannerMuted,
+                        fontSize: 11,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
@@ -162,6 +651,7 @@ class _NotificationBell extends StatefulWidget {
     required this.onDecline,
     required this.onOpen,
     required this.onMarkAllRead,
+    required this.onSeeAll,
   });
 
   final List<PendingInvite> invites;
@@ -170,6 +660,9 @@ class _NotificationBell extends StatefulWidget {
   final ValueChanged<PendingInvite> onDecline;
   final ValueChanged<AppNotification> onOpen;
   final VoidCallback onMarkAllRead;
+
+  /// Opens the full history page.
+  final VoidCallback onSeeAll;
 
   @override
   State<_NotificationBell> createState() => _NotificationBellState();
@@ -233,6 +726,10 @@ class _NotificationBellState extends State<_NotificationBell> {
           // Stays open: marking everything read is something you do while
           // looking at the list, not on the way out of it.
           onMarkAllRead: widget.onMarkAllRead,
+          onSeeAll: () {
+            _menu.close();
+            widget.onSeeAll();
+          },
         ),
       ],
       builder: (context, controller, _) {
@@ -301,6 +798,7 @@ class _NotificationPanel extends StatefulWidget {
     required this.onDecline,
     required this.onOpen,
     required this.onMarkAllRead,
+    required this.onSeeAll,
   });
 
   final List<PendingInvite> invites;
@@ -310,6 +808,7 @@ class _NotificationPanel extends StatefulWidget {
   final ValueChanged<PendingInvite> onDecline;
   final ValueChanged<AppNotification> onOpen;
   final VoidCallback onMarkAllRead;
+  final VoidCallback onSeeAll;
 
   @override
   State<_NotificationPanel> createState() => _NotificationPanelState();
@@ -422,6 +921,10 @@ class _NotificationPanelState extends State<_NotificationPanel> {
                 ),
               ),
             ),
+          // Always offered, even on an empty panel: the panel shows a recent
+          // slice, and "is that everything?" is the question it leaves behind.
+          const Divider(height: 1, color: plannerBorder),
+          _SeeAllButton(onPressed: widget.onSeeAll),
         ],
       ),
     );

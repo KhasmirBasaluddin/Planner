@@ -23,6 +23,7 @@ class PlannerSidebar extends StatefulWidget {
     required this.onJoinWorkspace,
     required this.onRenameWorkspace,
     required this.onManageMembers,
+    required this.onOpenDeletedItems,
     required this.onLeaveWorkspace,
     required this.onDeleteWorkspace,
     required this.onSignOut,
@@ -53,6 +54,9 @@ class PlannerSidebar extends StatefulWidget {
   final VoidCallback onJoinWorkspace;
   final VoidCallback onRenameWorkspace;
   final VoidCallback onManageMembers;
+
+  /// The recycle bin: everything soft-deleted, and the way back.
+  final VoidCallback onOpenDeletedItems;
   final VoidCallback onLeaveWorkspace;
   final VoidCallback onDeleteWorkspace;
   final VoidCallback onSignOut;
@@ -88,6 +92,7 @@ class _PlannerSidebarState extends State<PlannerSidebar> {
   VoidCallback get onJoinWorkspace => widget.onJoinWorkspace;
   VoidCallback get onRenameWorkspace => widget.onRenameWorkspace;
   VoidCallback get onManageMembers => widget.onManageMembers;
+  VoidCallback get onOpenDeletedItems => widget.onOpenDeletedItems;
   VoidCallback get onLeaveWorkspace => widget.onLeaveWorkspace;
   VoidCallback get onDeleteWorkspace => widget.onDeleteWorkspace;
   VoidCallback get onSignOut => widget.onSignOut;
@@ -172,6 +177,7 @@ class _PlannerSidebarState extends State<PlannerSidebar> {
                         onJoin: onJoinWorkspace,
                         onRename: onRenameWorkspace,
                         onManageMembers: onManageMembers,
+                        onOpenDeletedItems: onOpenDeletedItems,
                         onLeave: onLeaveWorkspace,
                         onDelete: onDeleteWorkspace,
                       ),
@@ -291,7 +297,15 @@ class _PlannerSidebarState extends State<PlannerSidebar> {
               // Pinned to the bottom of the rail: signing out is a top-level
               // action people expect to find here, not inside a menu.
               Divider(color: Colors.white.withValues(alpha: 0.07), height: 1),
-              _SidebarSignOut(compact: compact, onPressed: onSignOut),
+              // Account lives in the navbar's avatar menu, with the email it
+              // belongs to. Only sign out stays here.
+              _SidebarFooterButton(
+                compact: compact,
+                onPressed: onSignOut,
+                icon: Icons.logout_rounded,
+                label: 'Sign out',
+                danger: true,
+              ),
             ],
           ),
         ),
@@ -313,6 +327,7 @@ class _WorkspaceSwitcher extends StatelessWidget {
     required this.onJoin,
     required this.onRename,
     required this.onManageMembers,
+    required this.onOpenDeletedItems,
     required this.onLeave,
     required this.onDelete,
   });
@@ -327,6 +342,9 @@ class _WorkspaceSwitcher extends StatelessWidget {
   final VoidCallback onJoin;
   final VoidCallback onRename;
   final VoidCallback onManageMembers;
+
+  /// The recycle bin: everything soft-deleted, and the way back.
+  final VoidCallback onOpenDeletedItems;
   final VoidCallback onLeave;
   final VoidCallback onDelete;
 
@@ -358,6 +376,8 @@ class _WorkspaceSwitcher extends StatelessWidget {
                 onRename();
               case _MenuKind.members:
                 onManageMembers();
+              case _MenuKind.deleted:
+                onOpenDeletedItems();
               case _MenuKind.leave:
                 onLeave();
               case _MenuKind.delete:
@@ -457,6 +477,18 @@ class _WorkspaceSwitcher extends StatelessWidget {
             ),
           ),
         ],
+        // Anyone who can edit sees the bin. Restoring is deliberately not
+        // reserved for admins: the point of a recycle bin is that an ordinary
+        // mistake can be undone by the person who made it, without waiting.
+        if (workspace != null && workspace!.role.canEdit)
+          PopupMenuItem(
+            value: const _WorkspaceMenuAction(_MenuKind.deleted),
+            height: 40,
+            child: const _MenuRow(
+              icon: Icons.restore_from_trash_outlined,
+              label: 'Deleted items',
+            ),
+          ),
         // Everyone else gets the team roster, read-only. Seeing who you work
         // with is not a management action.
         if (workspace != null && !workspace!.role.canManageMembers)
@@ -591,7 +623,7 @@ class _WorkspaceSwitchAction extends _WorkspaceAction {
   final int index;
 }
 
-enum _MenuKind { create, join, rename, members, leave, delete }
+enum _MenuKind { create, join, rename, members, deleted, leave, delete }
 
 class _WorkspaceMenuAction extends _WorkspaceAction {
   const _WorkspaceMenuAction(this.kind);
@@ -1056,37 +1088,49 @@ class _BoardRowMenu extends StatelessWidget {
 
 enum _SidebarBoardAction { pin, rename, delete }
 
-/// Sign out, at the foot of the sidebar. Red on hover so the consequence is
-/// clear without shouting at rest.
-class _SidebarSignOut extends StatefulWidget {
-  const _SidebarSignOut({required this.compact, required this.onPressed});
+/// An action at the foot of the sidebar — account, sign out.
+///
+/// [danger] tints it red on hover, so a destructive one reads as such without
+/// shouting at rest.
+class _SidebarFooterButton extends StatefulWidget {
+  const _SidebarFooterButton({
+    required this.compact,
+    required this.onPressed,
+    required this.icon,
+    required this.label,
+    this.danger = false,
+  });
 
   final bool compact;
   final VoidCallback onPressed;
+  final IconData icon;
+  final String label;
+  final bool danger;
 
   @override
-  State<_SidebarSignOut> createState() => _SidebarSignOutState();
+  State<_SidebarFooterButton> createState() => _SidebarFooterButtonState();
 }
 
-class _SidebarSignOutState extends State<_SidebarSignOut> {
+class _SidebarFooterButtonState extends State<_SidebarFooterButton> {
   bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    final foreground = _hovered ? plannerRed : const Color(0xFF9096B8);
+    final accent = widget.danger ? plannerRed : Colors.white;
+    final foreground = _hovered ? accent : const Color(0xFF9096B8);
 
     return Padding(
       padding: widget.compact
           ? const EdgeInsets.fromLTRB(14, 10, 14, 12)
           : const EdgeInsets.fromLTRB(12, 10, 12, 12),
       child: Tooltip(
-        message: widget.compact ? 'Sign out' : '',
+        message: widget.compact ? widget.label : '',
         child: MouseRegion(
           onEnter: (_) => setState(() => _hovered = true),
           onExit: (_) => setState(() => _hovered = false),
           child: Material(
             color: _hovered
-                ? plannerRed.withValues(alpha: 0.14)
+                ? accent.withValues(alpha: widget.danger ? 0.14 : 0.08)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(radiusSm),
             child: InkWell(
@@ -1102,11 +1146,11 @@ class _SidebarSignOutState extends State<_SidebarSignOut> {
                       ? MainAxisAlignment.center
                       : MainAxisAlignment.start,
                   children: [
-                    Icon(Icons.logout_rounded, size: 16, color: foreground),
+                    Icon(widget.icon, size: 16, color: foreground),
                     if (!widget.compact) ...[
                       const SizedBox(width: 9),
                       Text(
-                        'Sign out',
+                        widget.label,
                         style: TextStyle(
                           color: foreground,
                           fontSize: 12.5,

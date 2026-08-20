@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 
 /// A person in a workspace. Names come from `profiles`, which mirrors
@@ -72,6 +73,181 @@ enum WorkspaceRole {
       this == WorkspaceRole.owner || this == WorkspaceRole.admin;
 }
 
+/// What a work note is for.
+///
+/// Mirrors the `task_note_kind` enum. Wire names are snake_case.
+enum TaskNoteKind {
+  /// Progress, written at any point.
+  update('update', 'Update', Icons.sticky_note_2_outlined),
+
+  /// "This is done, here is what I did."
+  submission('submission', 'Submitted', Icons.outbox_rounded),
+
+  /// Sent back: "this is not right yet, because…"
+  rejection('rejection', 'Sent back', Icons.undo_rounded),
+
+  /// Accepted by whoever was reviewing it.
+  approval('approval', 'Approved', Icons.verified_rounded);
+
+  const TaskNoteKind(this.wire, this.label, this.icon);
+
+  final String wire;
+  final String label;
+  final IconData icon;
+
+  static TaskNoteKind fromName(String value) {
+    return TaskNoteKind.values.firstWhere(
+      (kind) => kind.wire == value,
+      orElse: () => TaskNoteKind.update,
+    );
+  }
+
+  /// Approving and sending back are verdicts on someone else's work, so they
+  /// are reserved for whoever manages the team. Writing an update or
+  /// submitting your own work is not.
+  bool get isVerdict =>
+      this == TaskNoteKind.rejection || this == TaskNoteKind.approval;
+}
+
+/// A file attached to a note.
+///
+/// The bytes live in Supabase Storage; this is the pointer plus what the list
+/// needs to render without fetching anything.
+class NoteAttachment {
+  const NoteAttachment({
+    required this.id,
+    required this.noteId,
+    required this.storagePath,
+    required this.fileName,
+    required this.contentType,
+    required this.byteSize,
+  });
+
+  factory NoteAttachment.fromMap(Map<String, dynamic> map) {
+    return NoteAttachment(
+      id: map['id'] as String,
+      noteId: (map['note_id'] ?? '') as String,
+      storagePath: (map['storage_path'] ?? '') as String,
+      fileName: (map['file_name'] ?? 'file') as String,
+      contentType:
+          (map['content_type'] ?? 'application/octet-stream') as String,
+      byteSize: (map['byte_size'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  final String id;
+  final String noteId;
+  final String storagePath;
+  final String fileName;
+  final String contentType;
+  final int byteSize;
+
+  /// Images preview inline; everything else opens in the default application.
+  bool get isImage => contentType.startsWith('image/');
+
+  /// Human-readable size. Whole numbers below a megabyte — nobody needs
+  /// "384.0 KB".
+  String get readableSize {
+    if (byteSize < 1024) {
+      return '$byteSize B';
+    }
+    if (byteSize < 1024 * 1024) {
+      return '${(byteSize / 1024).round()} KB';
+    }
+    return '${(byteSize / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+}
+
+/// A file picked but not yet uploaded.
+///
+/// Held in memory between choosing a file and writing the note it belongs to,
+/// because the note row has to exist before an attachment can reference it.
+class NoteUpload {
+  const NoteUpload({
+    required this.fileName,
+    required this.bytes,
+    required this.contentType,
+  });
+
+  final String fileName;
+  final Uint8List bytes;
+  final String contentType;
+
+  bool get isImage => contentType.startsWith('image/');
+
+  String get readableSize {
+    final size = bytes.length;
+    if (size < 1024) {
+      return '$size B';
+    }
+    if (size < 1024 * 1024) {
+      return '${(size / 1024).round()} KB';
+    }
+    return '${(size / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+}
+
+/// One entry in a task's work log.
+///
+/// Distinct from a comment: a comment is conversation, this is the record of
+/// what was done and the evidence for it. It carries the status the task moved
+/// between, so the timeline reads as a history of the work rather than a list
+/// of remarks.
+class TaskNote {
+  const TaskNote({
+    required this.id,
+    required this.taskId,
+    required this.kind,
+    required this.body,
+    required this.createdAt,
+    this.author,
+    this.statusFrom,
+    this.statusTo,
+    this.editedAt,
+    this.attachments = const [],
+  });
+
+  factory TaskNote.fromMap(
+    Map<String, dynamic> map, {
+    UserProfile? author,
+    List<NoteAttachment> attachments = const [],
+  }) {
+    return TaskNote(
+      id: map['id'] as String,
+      taskId: (map['task_id'] ?? '') as String,
+      kind: TaskNoteKind.fromName((map['kind'] ?? 'update') as String),
+      body: (map['body'] ?? '') as String,
+      author: author,
+      statusFrom: map['status_from'] as String?,
+      statusTo: map['status_to'] as String?,
+      editedAt: _parseDate(map['edited_at']),
+      createdAt: _parseDate(map['created_at']) ?? DateTime.now(),
+      attachments: attachments,
+    );
+  }
+
+  final String id;
+  final String taskId;
+  final TaskNoteKind kind;
+  final String body;
+  final UserProfile? author;
+
+  /// The status names at the time, not ids: a label can be renamed or deleted
+  /// later, and the note has to keep saying what actually happened.
+  final String? statusFrom;
+  final String? statusTo;
+
+  final DateTime? editedAt;
+  final DateTime createdAt;
+  final List<NoteAttachment> attachments;
+
+  bool get wasEdited => editedAt != null;
+
+  /// Whether this note records a status move worth showing beside it.
+  bool get movedStatus =>
+      statusTo != null && statusTo!.isNotEmpty && statusFrom != statusTo;
+}
+
 /// A team container. Every board, task and note belongs to exactly one.
 class Workspace {
   const Workspace({
@@ -107,6 +283,45 @@ class Workspace {
 
   /// Short shareable code, e.g. PLNR-7K2M, for joining without an email invite.
   final String joinCode;
+}
+
+/// Whether the display name can be changed, and when it can be if not.
+///
+/// A name is how teammates recognise each other across every board and comment
+/// in the workspace, so changes are rate limited to one a week. The database
+/// decides — see migration 0012 — and this is what it reports back.
+class NameChangeStatus {
+  const NameChangeStatus({
+    required this.canChangeNow,
+    required this.nextAllowedAt,
+  });
+
+  factory NameChangeStatus.fromMap(Map<String, dynamic> map) {
+    final next = DateTime.tryParse((map['next_allowed_at'] ?? '') as String);
+    return NameChangeStatus(
+      canChangeNow: (map['can_change_now'] as bool?) ?? true,
+      nextAllowedAt: next?.toLocal(),
+    );
+  }
+
+  final bool canChangeNow;
+
+  /// Null when the name has never been changed, so nothing is being waited on.
+  final DateTime? nextAllowedAt;
+
+  /// Whole days left, rounded up — "in 3 days" reads better than a timestamp,
+  /// and rounding up avoids promising a change that is still hours away.
+  int get daysRemaining {
+    final until = nextAllowedAt;
+    if (canChangeNow || until == null) {
+      return 0;
+    }
+    final left = until.difference(DateTime.now());
+    if (left.isNegative) {
+      return 0;
+    }
+    return left.inHours ~/ 24 + (left.inHours % 24 == 0 ? 0 : 1);
+  }
 }
 
 class WorkspaceMember {
@@ -422,6 +637,9 @@ class PlannerTask {
     this.startDate,
     this.endDate,
     this.commentCount = 0,
+    this.noteCount = 0,
+    this.statusBy,
+    this.statusAt,
   });
 
   factory PlannerTask.fromMap(Map<String, dynamic> map) {
@@ -440,6 +658,11 @@ class PlannerTask {
       position: (map['position'] as num?)?.toDouble() ?? 0,
       progressAt: _parseDate(map['progress_at']),
       commentCount: (map['comment_count'] as num?)?.toInt() ?? 0,
+      noteCount: (map['note_count'] as num?)?.toInt() ?? 0,
+      statusBy: map['status_by'] is Map<String, dynamic>
+          ? UserProfile.fromMap(map['status_by'] as Map<String, dynamic>)
+          : null,
+      statusAt: _parseDate(map['status_at']),
       assigneeIds: assignees.whereType<String>().toList(),
     );
   }
@@ -472,6 +695,17 @@ class PlannerTask {
   /// the stale sweep tell a stalled task from a busy one.
   final DateTime? progressAt;
   final int commentCount;
+  final int noteCount;
+
+  /// Who last moved this task's status, and when.
+  ///
+  /// A task can have several assignees, so the avatars on the row say who is
+  /// responsible — not who actually marked it done. This answers that, and it
+  /// is the question every review conversation starts with.
+  ///
+  /// Null when a trigger or a scheduled sweep moved it rather than a person.
+  final UserProfile? statusBy;
+  final DateTime? statusAt;
 
   /// Overdue needs to know whether the task is finished, which is the board's
   /// business — hence the parameter rather than a bare getter.
@@ -724,6 +958,26 @@ class AppNotification {
     this.actor,
     this.readAt,
   });
+
+  /// The same notification, marked read.
+  ///
+  /// Lets "mark all read" repaint the list at once instead of waiting for the
+  /// realtime echo, which leaves the rows looking untouched for a beat.
+  AppNotification markedRead() {
+    return AppNotification(
+      id: id,
+      kind: kind,
+      title: title,
+      createdAt: createdAt,
+      body: body,
+      workspaceId: workspaceId,
+      taskId: taskId,
+      boardId: boardId,
+      inviteId: inviteId,
+      actor: actor,
+      readAt: readAt ?? DateTime.now(),
+    );
+  }
 
   factory AppNotification.fromMap(
     Map<String, dynamic> map, {

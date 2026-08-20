@@ -2,62 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/supabase/auth_service.dart';
+import '../../shared/utils/password_rules.dart';
 import '../../shared/utils/planner_colors.dart';
 import '../../shared/utils/text_rules.dart';
 
 enum _AuthMode { signIn, signUp, reset }
-
-/// Password rules for new accounts.
-///
-/// Length does more for real-world strength than character-class rules, so the
-/// floor is 8 with a nudge toward longer, and the mix requirement is kept mild
-/// rather than the usual "one of each of four types" — that pattern reliably
-/// produces `Password1!` and nothing safer.
-class _PasswordCheck {
-  const _PasswordCheck({
-    required this.hasLength,
-    required this.hasLetter,
-    required this.hasNumberOrSymbol,
-    required this.isLong,
-  });
-
-  factory _PasswordCheck.of(String value) {
-    return _PasswordCheck(
-      hasLength: value.length >= 8,
-      hasLetter: RegExp(r'[A-Za-z]').hasMatch(value),
-      hasNumberOrSymbol: RegExp(r'[0-9\W_]').hasMatch(value),
-      isLong: value.length >= 12,
-    );
-  }
-
-  final bool hasLength;
-  final bool hasLetter;
-  final bool hasNumberOrSymbol;
-  final bool isLong;
-
-  bool get isValid => hasLength && hasLetter && hasNumberOrSymbol;
-
-  /// 0–3, for the strength meter.
-  int get score {
-    if (!isValid) {
-      return hasLength || hasLetter ? 1 : 0;
-    }
-    return isLong ? 3 : 2;
-  }
-
-  String get label => switch (score) {
-    0 => 'Too short',
-    1 => 'Weak',
-    2 => 'Good',
-    _ => 'Strong',
-  };
-
-  Color get color => switch (score) {
-    0 || 1 => plannerRed,
-    2 => plannerYellow,
-    _ => plannerGreen,
-  };
-}
 
 /// Sign-in / sign-up / password reset, presented as a split screen: a branded
 /// panel that sells the product on the left, and the form on the right. On
@@ -375,7 +324,7 @@ class _LoginPageState extends State<LoginPage> {
                 if (isSignUp && containsEmoji(password)) {
                   return 'Emoji are not allowed in a password.';
                 }
-                if (isSignUp && !_PasswordCheck.of(password).isValid) {
+                if (isSignUp && !PasswordCheck.of(password).isValid) {
                   return 'Use at least 8 characters, with a letter and a '
                       'number or symbol.';
                 }
@@ -398,9 +347,7 @@ class _LoginPageState extends State<LoginPage> {
             // there is something to judge, so an empty form is not scolding.
             if (isSignUp && _passwordController.text.isNotEmpty) ...[
               const SizedBox(height: 8),
-              _StrengthMeter(
-                check: _PasswordCheck.of(_passwordController.text),
-              ),
+              _StrengthMeter(check: PasswordCheck.of(_passwordController.text)),
             ],
 
             // Confirm field: catches the typo that would otherwise lock someone
@@ -1153,7 +1100,7 @@ class _PaperPainter extends CustomPainter {
 class _StrengthMeter extends StatelessWidget {
   const _StrengthMeter({required this.check});
 
-  final _PasswordCheck check;
+  final PasswordCheck check;
 
   @override
   Widget build(BuildContext context) {

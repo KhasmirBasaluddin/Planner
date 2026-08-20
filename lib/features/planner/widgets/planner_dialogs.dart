@@ -11,6 +11,7 @@ import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
 import '../../../shared/utils/text_rules.dart';
 import '../../../shared/widgets/app_dialog.dart';
+import 'task_notes_panel.dart';
 import '../../../shared/widgets/user_avatar.dart';
 
 // === Name + color dialog (boards, groups, workspaces) ===
@@ -1414,6 +1415,18 @@ Future<void> showTaskChatDialog({
   required List<WorkspaceMember> members,
   required String currentUserId,
   required bool canEdit,
+  required String workspaceId,
+  List<StatusLabel> statuses = const [],
+
+  /// Opens straight onto the work log rather than the conversation. Used when
+  /// arriving from a note notification, or from the notes badge on a row.
+  bool openNotes = false,
+
+  /// Told when a note lands, so the board can refresh its badge.
+  VoidCallback? onNotesChanged,
+
+  /// Signs off on submitted work. Null for anyone who cannot review.
+  VoidCallback? onApproveWork,
 }) {
   return showDialog<void>(
     context: context,
@@ -1423,6 +1436,11 @@ Future<void> showTaskChatDialog({
       members: members,
       currentUserId: currentUserId,
       canEdit: canEdit,
+      workspaceId: workspaceId,
+      statuses: statuses,
+      openNotes: openNotes,
+      onNotesChanged: onNotesChanged,
+      onApproveWork: onApproveWork,
     ),
   );
 }
@@ -1434,6 +1452,11 @@ class _TaskChatDialog extends StatefulWidget {
     required this.members,
     required this.currentUserId,
     required this.canEdit,
+    required this.workspaceId,
+    this.statuses = const [],
+    this.openNotes = false,
+    this.onNotesChanged,
+    this.onApproveWork,
   });
 
   final PlannerTask task;
@@ -1444,11 +1467,26 @@ class _TaskChatDialog extends StatefulWidget {
   /// Viewers read the conversation but cannot add to it.
   final bool canEdit;
 
+  final String workspaceId;
+  final List<StatusLabel> statuses;
+  final bool openNotes;
+  final VoidCallback? onNotesChanged;
+  final VoidCallback? onApproveWork;
+
   @override
   State<_TaskChatDialog> createState() => _TaskChatDialogState();
 }
 
 class _TaskChatDialogState extends State<_TaskChatDialog> {
+  /// Conversation or work log. Two tabs rather than one merged stream: a
+  /// comment is disposable and a note is evidence, and putting them in one
+  /// list is what buried the proof of completion in the first place.
+  late bool _showNotes = widget.openNotes;
+
+  /// Kept locally so the tab count moves the moment a note is written,
+  /// without waiting for the board to reload the task.
+  late int _noteCount = widget.task.noteCount;
+
   final TextEditingController _composer = TextEditingController();
   final ScrollController _scroll = ScrollController();
   final FocusNode _composerFocus = FocusNode();
@@ -1882,6 +1920,31 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
               messageCount: _messageCount,
               onClose: () => Navigator.of(context).pop(),
             ),
+            _ChatTabs(
+              showNotes: _showNotes,
+              messageCount: _messageCount,
+              noteCount: _noteCount,
+              onChanged: (notes) => setState(() => _showNotes = notes),
+            ),
+            if (_showNotes)
+              Flexible(
+                child: TaskNotesPanel(
+                  task: widget.task,
+                  workspaceId: widget.workspaceId,
+                  repository: widget.repository,
+                  currentUserId: widget.currentUserId,
+                  canEdit: widget.canEdit,
+                  statuses: widget.statuses,
+                  onApprove: widget.onApproveWork,
+                  onCountChanged: (count) {
+                    if (mounted) {
+                      setState(() => _noteCount = count);
+                    }
+                    widget.onNotesChanged?.call();
+                  },
+                ),
+              )
+            else ...[
             if (_error != null) _ChatError(message: _error!),
             Flexible(
               child: _loading
@@ -1893,85 +1956,93 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
                     )
                   : _comments.isEmpty
                   ? const _ChatEmpty()
-                  : Align(
-                      // Bottom, so a short conversation grows up out of the
-                      // composer instead of hanging from the header.
-                      alignment: Alignment.bottomCenter,
-                      // SelectionArea rather than per-message SelectableText:
-                      // it lets a drag sweep across several messages and copy
-                      // them together, and it leaves the link spans inside
-                      // free to take taps.
-                      child: SelectionArea(
-                        child: ListView.builder(
-                          controller: _scroll,
-                          padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                  // SelectionArea rather than per-message SelectableText:
+                  // it lets a drag sweep across several messages and copy
+                  // them together, and it leaves the link spans inside
+                  // free to take taps.
+                  : SelectionArea(
+                      child: CustomScrollView(
+                        controller: _scroll,
+                        slivers: [
                           // Messages stack up from the composer, the way every
-                          // chat does. Without this a conversation with two
-                          // messages in it pinned them to the top of the panel
-                          // with a field of empty white beneath, as far from the
-                          // box you type in as the layout allowed.
+                          // chat does: this filler eats whatever height the
+                          // conversation does not, so a two-message thread sits
+                          // above the composer instead of hanging from the
+                          // header. Once the messages outgrow the viewport it
+                          // collapses to nothing and the list scrolls normally.
                           //
-                          // This only affects the short case: once the messages
-                          // are taller than the viewport the alignment has nothing
-                          // left to give and the list scrolls normally.
-                          //
-                          // shrinkWrap lets the viewport size to its content so
-                          // there is slack for the alignment to consume; without
-                          // it the list always claims the full height and sits at
-                          // the top regardless.
-                          shrinkWrap: true,
-                          itemCount: timeline.length,
-                          itemBuilder: (context, index) {
-                            final entry = timeline[index];
-                            final comment = entry.comment;
-                            // A run by one person shows their name once. Three
-                            // identical bylines in a column was the list telling
-                            // you what you could already see. A reply always
-                            // breaks the run, because it carries a quote above it.
-                            final previous = index > 0
-                                ? timeline[index - 1]
-                                : null;
-                            // Messenger-style: the date and time stand between
-                            // messages as a centred divider whenever the
-                            // conversation pauses, rather than cluttering every
-                            // byline. A divider also breaks the author run.
-                            final timeBreak =
-                                previous == null ||
-                                comment.createdAt
-                                        .difference(previous.comment.createdAt)
-                                        .inMinutes >=
-                                    20;
-                            final bubble = _MessageBubble(
-                              comment: comment,
-                              replyingTo: entry.parent,
-                              grouped:
-                                  !timeBreak &&
-                                  entry.parent == null &&
-                                  previous.comment.author?.id ==
-                                      comment.author?.id,
-                              members: widget.members,
-                              currentUserId: widget.currentUserId,
-                              // Replies stay one deep: you answer the message,
-                              // not the answer.
-                              onReply: entry.parent == null
-                                  ? () => _startReply(comment)
-                                  : null,
-                              onEdit: () => _startEditing(comment),
-                              onDelete: () => _delete(comment),
-                              onReact: (emoji) => _react(comment, emoji),
-                            );
-                            if (!timeBreak) {
-                              return bubble;
-                            }
-                            return Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _TimeDivider(comment.createdAt),
-                                bubble,
-                              ],
-                            );
-                          },
-                        ),
+                          // This replaces an Align around a shrinkWrap:true
+                          // ListView. That combination re-measured the whole
+                          // conversation on every rebuild — and since hovering a
+                          // message rebuilds it, moving the mouse across the
+                          // thread visibly scrolled it. A sliver does the same
+                          // job with a fixed-height viewport, so hover no longer
+                          // moves the content.
+                          const SliverFillRemaining(
+                            hasScrollBody: false,
+                            fillOverscroll: false,
+                            child: SizedBox.shrink(),
+                          ),
+                          SliverPadding(
+                            padding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
+                            sliver: SliverList.builder(
+                              itemCount: timeline.length,
+                              itemBuilder: (context, index) {
+                                final entry = timeline[index];
+                                final comment = entry.comment;
+                                // A run by one person shows their name once. Three
+                                // identical bylines in a column was the list telling
+                                // you what you could already see. A reply always
+                                // breaks the run, because it carries a quote above it.
+                                final previous = index > 0
+                                    ? timeline[index - 1]
+                                    : null;
+                                // Messenger-style: the date and time stand between
+                                // messages as a centred divider whenever the
+                                // conversation pauses, rather than cluttering every
+                                // byline. A divider also breaks the author run.
+                                final timeBreak =
+                                    previous == null ||
+                                    comment.createdAt
+                                            .difference(
+                                              previous.comment.createdAt,
+                                            )
+                                            .inMinutes >=
+                                        20;
+                                final bubble = _MessageBubble(
+                                  comment: comment,
+                                  replyingTo: entry.parent,
+                                  grouped:
+                                      !timeBreak &&
+                                      entry.parent == null &&
+                                      previous.comment.author?.id ==
+                                          comment.author?.id,
+                                  members: widget.members,
+                                  currentUserId: widget.currentUserId,
+                                  // Replies stay one deep: you answer the message,
+                                  // not the answer.
+                                  onReply: entry.parent == null
+                                      ? () => _startReply(comment)
+                                      : null,
+                                  onEdit: () => _startEditing(comment),
+                                  onDelete: () => _delete(comment),
+                                  onReact: (emoji) => _react(comment, emoji),
+                                );
+                                if (!timeBreak) {
+                                  return bubble;
+                                }
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    _TimeDivider(comment.createdAt),
+                                    bubble,
+                                  ],
+                                );
+                              },
+                            ),
+                          ),
+                        ],
                       ),
                     ),
             ),
@@ -2024,6 +2095,126 @@ class _TaskChatDialogState extends State<_TaskChatDialog> {
                 onSend: _send,
                 onCancel: _cancelComposerMode,
               ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Conversation or work log.
+///
+/// The counts sit on the tabs because "has anyone written up what they did?"
+/// is answerable from here without switching.
+class _ChatTabs extends StatelessWidget {
+  const _ChatTabs({
+    required this.showNotes,
+    required this.messageCount,
+    required this.noteCount,
+    required this.onChanged,
+  });
+
+  final bool showNotes;
+  final int messageCount;
+  final int noteCount;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: const BoxDecoration(
+        color: plannerCard,
+        border: Border(bottom: BorderSide(color: plannerBorder)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Row(
+        children: [
+          _ChatTab(
+            icon: Icons.forum_outlined,
+            label: 'Chat',
+            count: messageCount,
+            selected: !showNotes,
+            onTap: () => onChanged(false),
+          ),
+          _ChatTab(
+            icon: Icons.fact_check_outlined,
+            label: 'Work notes',
+            count: noteCount,
+            selected: showNotes,
+            onTap: () => onChanged(true),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ChatTab extends StatelessWidget {
+  const _ChatTab({
+    required this.icon,
+    required this.label,
+    required this.count,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final int count;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tone = selected ? plannerBlue : plannerMuted;
+
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 11),
+        decoration: BoxDecoration(
+          border: Border(
+            bottom: BorderSide(
+              color: selected ? plannerBlue : Colors.transparent,
+              width: 2,
+            ),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: tone),
+            const SizedBox(width: 7),
+            Text(
+              label,
+              style: TextStyle(
+                color: tone,
+                fontSize: 12.5,
+                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            if (count > 0) ...[
+              const SizedBox(width: 6),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: selected ? tint(plannerBlue, 0.14) : plannerSurface,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    color: tone,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -2804,8 +2995,17 @@ class _MessageBody extends StatefulWidget {
 class _MessageBodyState extends State<_MessageBody> {
   final List<TapGestureRecognizer> _linkTaps = [];
 
+  /// Runs of non-whitespace after a scheme — but stopping at the point where
+  /// the *next* link begins.
+  ///
+  /// Without that lookahead this was a plain `[^\s]+`, which is greedy over
+  /// anything that is not a space. Several URLs pasted back to back with no
+  /// separator between them are one unbroken run of non-whitespace, so the
+  /// whole pile matched as a single enormous "link": it rendered as one
+  /// underlined blob, and the confirmation dialog then offered to open an
+  /// address that was really dozens of them concatenated.
   static final RegExp _linkPattern = RegExp(
-    r'(https?://|www\.)[^\s]+',
+    r'(https?://|www\.)(?:(?!https?://)[^\s])*',
     caseSensitive: false,
   );
 
@@ -2895,8 +3095,17 @@ class _MessageBodyState extends State<_MessageBody> {
             borderRadius: BorderRadius.circular(radiusSm),
             border: Border.all(color: plannerBorder),
           ),
+          // Capped, and ellipsised rather than wrapped forever. A pasted wall
+          // of text is still a single "link" as far as the matcher is
+          // concerned, and showing all of it grew the dialog past the bottom
+          // of the screen — taking the Cancel and Open buttons with it, which
+          // left no way to answer the question being asked.
+          //
+          // The host is what the decision actually turns on, and it is in the
+          // first line, so the beginning is the part worth keeping.
           child: SelectableText(
             normalized,
+            maxLines: 4,
             style: const TextStyle(
               fontFamily: 'Consolas',
               fontSize: 12,
@@ -3989,6 +4198,77 @@ class _ComposerContext extends StatelessWidget {
 }
 
 /// The chat button on a task row, with an unread-style count.
+/// The work-log badge, beside the chat one.
+///
+/// Deliberately a different shape and colour from [ChatButton]: the two sit
+/// next to each other on every row, and "has anyone written up what they did?"
+/// is a different question from "has anyone said anything?". Green, because
+/// the log is where finished work is evidenced.
+class NotesButton extends StatelessWidget {
+  const NotesButton({
+    super.key,
+    required this.task,
+    required this.onOpenNotes,
+  });
+
+  final PlannerTask task;
+  final ValueChanged<PlannerTask> onOpenNotes;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = task.noteCount;
+    final hasNotes = count > 0;
+
+    return Tooltip(
+      message: hasNotes
+          ? '$count work ${count == 1 ? 'note' : 'notes'} — open the log'
+          : 'Add a work note',
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => onOpenNotes(task),
+          borderRadius: BorderRadius.circular(99),
+          child: Container(
+            height: 22,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+            decoration: BoxDecoration(
+              color: hasNotes ? tint(plannerGreen, 0.10) : Colors.transparent,
+              borderRadius: BorderRadius.circular(99),
+              border: Border.all(
+                color: hasNotes ? tint(plannerGreen, 0.40) : plannerBorder,
+              ),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  hasNotes
+                      ? Icons.fact_check_rounded
+                      : Icons.fact_check_outlined,
+                  size: 13,
+                  color: hasNotes ? plannerGreen : plannerMuted,
+                ),
+                if (hasNotes) ...[
+                  const SizedBox(width: 4),
+                  Text(
+                    compactCount(count),
+                    style: const TextStyle(
+                      color: plannerGreen,
+                      fontSize: 10.5,
+                      fontWeight: FontWeight.w700,
+                      height: 1,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class ChatButton extends StatelessWidget {
   const ChatButton({
     super.key,

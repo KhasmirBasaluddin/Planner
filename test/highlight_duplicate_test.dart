@@ -90,6 +90,7 @@ void main() {
         onStatusChanged: (_, _) async {},
         onProgressChanged: (_, _) async {},
         onOpenChat: (_) {},
+        onOpenNotes: (_) {},
       ),
     );
     expect(tester.takeException(), isNull);
@@ -112,6 +113,7 @@ void main() {
         onStatusChanged: (_, _) async {},
         onProgressChanged: (_, _) async {},
         onOpenChat: (_) {},
+        onOpenNotes: (_) {},
       ),
     );
     expect(tester.takeException(), isNull);
@@ -132,6 +134,7 @@ void main() {
         onStatusChanged: (_, _) async {},
         onProgressChanged: (_, _) async {},
         onOpenChat: (_) {},
+        onOpenNotes: (_) {},
       ),
     );
     expect(tester.takeException(), isNull);
@@ -171,6 +174,7 @@ void main() {
               onStatusChanged: (_, _) async {},
               onProgressChanged: (_, _) async {},
               onOpenChat: (_) {},
+              onOpenNotes: (_) {},
             ),
           ),
           Expanded(
@@ -184,6 +188,7 @@ void main() {
               onStatusChanged: (_, _) async {},
               onProgressChanged: (_, _) async {},
               onOpenChat: (_) {},
+              onOpenNotes: (_) {},
             ),
           ),
         ],

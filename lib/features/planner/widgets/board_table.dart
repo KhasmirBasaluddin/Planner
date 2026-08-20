@@ -58,6 +58,7 @@ class BoardTable extends StatefulWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.onTaskReorder,
     this.highlightedTaskId,
   });
@@ -83,6 +84,9 @@ class BoardTable extends StatefulWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -219,6 +223,7 @@ class _BoardTableState extends State<BoardTable> {
                         onStatusChanged: widget.onStatusChanged,
                         onProgressChanged: widget.onProgressChanged,
                         onOpenChat: widget.onOpenChat,
+                        onOpenNotes: widget.onOpenNotes,
                         onTaskReorder: widget.onTaskReorder,
                         highlightedTaskId: widget.highlightedTaskId,
                       ),
@@ -311,6 +316,7 @@ class GroupSection extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.onTaskReorder,
     this.highlightedTaskId,
   });
@@ -331,6 +337,9 @@ class GroupSection extends StatelessWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
   final void Function(TaskGroup group, int oldIndex, int newIndex)?
   onTaskReorder;
 
@@ -446,6 +455,7 @@ class GroupSection extends StatelessWidget {
                       onStatusChanged: onStatusChanged,
                       onProgressChanged: onProgressChanged,
                       onOpenChat: onOpenChat,
+          onOpenNotes: onOpenNotes,
                       dragEnabled: onTaskReorder != null,
                       highlighted: highlighted,
                     ),
@@ -495,6 +505,7 @@ class TaskRow extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     required this.dragEnabled,
     this.highlighted = false,
   });
@@ -515,6 +526,9 @@ class TaskRow extends StatelessWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
   final bool dragEnabled;
 
   @override
@@ -564,6 +578,8 @@ class TaskRow extends StatelessWidget {
                   ),
                   const SizedBox(width: 8),
                   ChatButton(task: task, onOpenChat: onOpenChat),
+                  const SizedBox(width: 5),
+                  NotesButton(task: task, onOpenNotes: onOpenNotes),
                   const SizedBox(width: 4),
                 ],
               ),
@@ -740,10 +756,14 @@ class StatusMenu extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = statusColor(status);
+    final mover = (status?.isDone ?? false) ? task.statusBy : null;
     return Align(
       alignment: Alignment.centerLeft,
       child: PopupMenuButton<StatusLabel>(
-        tooltip: 'Change status',
+        // A task can have several assignees, so the avatars on the row say who
+        // is responsible — not who actually moved it. This answers that, and
+        // it is the question every review conversation starts with.
+        tooltip: statusByline(task) ?? 'Change status',
         onSelected: (choice) => onChanged(task, choice),
         itemBuilder: (context) => statuses.map((choice) {
           return PopupMenuItem(
@@ -803,12 +823,52 @@ class StatusMenu extends StatelessWidget {
                   ),
                 ),
               ),
+              // Only on a finished task. "Who marked this done?" is worth the
+              // space; "who moved it to Working" is not, and putting a face on
+              // every row would just be noise.
+              if (mover != null) ...[
+                const SizedBox(width: 5),
+                UserAvatar(profile: mover, size: 16, showTooltip: false),
+              ],
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// "Marked Done by Al-Khasmir, 2h ago" — or null when nobody in particular
+/// moved it.
+///
+/// Null is the honest answer for a status a trigger or a scheduled sweep
+/// moved: auth.uid() is null there, and inventing an actor would be worse
+/// than saying nothing.
+String? statusByline(PlannerTask task) {
+  final who = task.statusBy;
+  final when = task.statusAt;
+  if (who == null) {
+    return null;
+  }
+  final name = who.displayName;
+  if (when == null) {
+    return 'Moved by $name';
+  }
+  return 'Moved by $name, ${_ago(when)}';
+}
+
+String _ago(DateTime at) {
+  final diff = DateTime.now().difference(at.toLocal());
+  if (diff.inMinutes < 1) {
+    return 'just now';
+  }
+  if (diff.inMinutes < 60) {
+    return '${diff.inMinutes}m ago';
+  }
+  if (diff.inHours < 24) {
+    return '${diff.inHours}h ago';
+  }
+  return '${diff.inDays}d ago';
 }
 
 class PriorityPill extends StatelessWidget {

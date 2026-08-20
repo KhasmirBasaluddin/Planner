@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../models/planner_models.dart';
 import '../../../shared/utils/planner_colors.dart';
+import '../../../shared/widgets/user_avatar.dart';
 import 'board_table.dart';
 import 'planner_dialogs.dart';
 
@@ -16,6 +17,7 @@ class BoardKanban extends StatelessWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.highlightedTaskId,
   });
 
@@ -35,6 +37,9 @@ class BoardKanban extends StatelessWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -81,6 +86,7 @@ class BoardKanban extends StatelessWidget {
           onStatusChanged: onStatusChanged,
           onProgressChanged: onProgressChanged,
           onOpenChat: onOpenChat,
+          onOpenNotes: onOpenNotes,
           highlightedTaskId: highlightedTaskId,
         );
 
@@ -142,6 +148,7 @@ class _KanbanColumn extends StatefulWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.highlightedTaskId,
   });
 
@@ -156,6 +163,9 @@ class _KanbanColumn extends StatefulWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   State<_KanbanColumn> createState() => _KanbanColumnState();
@@ -232,6 +242,7 @@ class _KanbanColumnState extends State<_KanbanColumn> {
     final onStatusChanged = widget.onStatusChanged;
     final onProgressChanged = widget.onProgressChanged;
     final onOpenChat = widget.onOpenChat;
+    final onOpenNotes = widget.onOpenNotes;
     final color = statusColor(status);
     return DragTarget<PlannerTask>(
       onWillAcceptWithDetails: (details) => details.data.statusId != status.id,
@@ -311,6 +322,7 @@ class _KanbanColumnState extends State<_KanbanColumn> {
                             onDeleteTask: onDeleteTask,
                             onProgressChanged: onProgressChanged,
                             onOpenChat: onOpenChat,
+                            onOpenNotes: onOpenNotes,
                             highlighted: highlighted,
                           );
                           // RepaintBoundary per card: without it, one card's
@@ -371,6 +383,7 @@ class _KanbanCard extends StatelessWidget {
     required this.onDeleteTask,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.highlighted = false,
   });
 
@@ -387,6 +400,9 @@ class _KanbanCard extends StatelessWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+
+  /// Straight to the task's work log.
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -456,7 +472,23 @@ class _KanbanCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  // Who moved it, on the card that has no status column of
+                  // its own to hang it from — the column *is* the status here.
+                  if (statusByline(task) != null)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 4),
+                      child: Tooltip(
+                        message: statusByline(task)!,
+                        child: UserAvatar(
+                          profile: task.statusBy!,
+                          size: 18,
+                          showTooltip: false,
+                        ),
+                      ),
+                    ),
                   ChatButton(task: task, onOpenChat: onOpenChat, size: 26),
+                  const SizedBox(width: 5),
+                  NotesButton(task: task, onOpenNotes: onOpenNotes),
                   _TaskMenu(
                     onEdit: () => onEditTask(task),
                     onDelete: () => onDeleteTask(task),

@@ -109,6 +109,30 @@ class _MembersDialogState extends State<_MembersDialog> {
     super.dispose();
   }
 
+  /// Drops invitations whose recipient is already a member.
+  ///
+  /// Matched on id where the invitation was linked to an account, and on email
+  /// otherwise — someone invited before they signed up has no invitee_id until
+  /// the profile trigger fills it in.
+  static List<WorkspaceInvite> _stillPending(
+    List<WorkspaceInvite> invites,
+    List<WorkspaceMember> members,
+  ) {
+    final memberIds = {for (final m in members) m.profile.id};
+    final memberEmails = {
+      for (final m in members)
+        if (m.profile.email.isNotEmpty) m.profile.email.toLowerCase(),
+    };
+    return invites.where((invite) {
+      final inviteeId = invite.invitee?.id;
+      if (inviteeId != null && memberIds.contains(inviteeId)) {
+        return false;
+      }
+      final email = invite.email.trim().toLowerCase();
+      return email.isEmpty || !memberEmails.contains(email);
+    }).toList();
+  }
+
   Future<void> _load() async {
     try {
       final members = await widget.repository.loadMembers(widget.workspace.id);
@@ -118,7 +142,16 @@ class _MembersDialogState extends State<_MembersDialog> {
       }
       setState(() {
         _members = members;
-        _invites = invites;
+        // An invitation to somebody who is already here is not pending on
+        // anything. That happens when the invited person joins with the
+        // workspace code instead of answering — the membership appears, and
+        // the invitation is left untouched, so this dialog listed them as
+        // "pending" directly beneath their own entry in the members list.
+        //
+        // Migration 0011 settles those server-side on join. This mirrors the
+        // rule on the client so the list is right straight away, including on
+        // a database where that migration has not been run yet.
+        _invites = _stillPending(invites, members);
         _loading = false;
       });
     } catch (error) {

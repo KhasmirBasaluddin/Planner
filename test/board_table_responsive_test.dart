@@ -79,6 +79,7 @@ void main() {
             onStatusChanged: (_, _) async {},
             onProgressChanged: (_, _) async {},
             onOpenChat: (_) {},
+            onOpenNotes: (_) {},
             onTaskReorder: (_, _, _) {},
           ),
         ),

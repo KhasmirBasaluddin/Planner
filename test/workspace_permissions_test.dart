@@ -43,6 +43,7 @@ void main() {
               onJoinWorkspace: () {},
               onRenameWorkspace: () {},
               onManageMembers: () {},
+              onOpenDeletedItems: () {},
               onLeaveWorkspace: () {},
               onDeleteWorkspace: () {},
               onSignOut: () {},

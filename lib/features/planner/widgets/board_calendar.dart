@@ -18,6 +18,7 @@ class BoardCalendar extends StatefulWidget {
     required this.onStatusChanged,
     required this.onProgressChanged,
     required this.onOpenChat,
+    required this.onOpenNotes,
     this.highlightedTaskId,
   });
 
@@ -37,6 +38,7 @@ class BoardCalendar extends StatefulWidget {
   final Future<void> Function(PlannerTask task, double progress)
   onProgressChanged;
   final ValueChanged<PlannerTask> onOpenChat;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   State<BoardCalendar> createState() => _BoardCalendarState();
@@ -156,6 +158,7 @@ class _BoardCalendarState extends State<BoardCalendar> {
         onEditTask: widget.onEditTask,
         onDeleteTask: widget.onDeleteTask,
         onOpenChat: widget.onOpenChat,
+        onOpenNotes: widget.onOpenNotes,
       ),
     );
   }
@@ -865,6 +868,7 @@ class _TaskDetailsDialog extends StatelessWidget {
     required this.onEditTask,
     required this.onDeleteTask,
     required this.onOpenChat,
+    required this.onOpenNotes,
   });
 
   final _CalendarTask entry;
@@ -873,6 +877,7 @@ class _TaskDetailsDialog extends StatelessWidget {
   final ValueChanged<PlannerTask> onEditTask;
   final ValueChanged<PlannerTask> onDeleteTask;
   final ValueChanged<PlannerTask> onOpenChat;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -902,6 +907,7 @@ class _TaskDetailsDialog extends StatelessWidget {
                 status: status,
                 tone: tone,
                 onOpenChat: onOpenChat,
+                onOpenNotes: onOpenNotes,
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 18),
@@ -951,12 +957,50 @@ class _TaskDetailsDialog extends StatelessWidget {
                         tone: tone,
                       ),
                     ],
+                    // Who actually moved this, spelled out. A task can carry
+                    // several assignees, so the avatars above say who is
+                    // responsible rather than who marked it done.
+                    if (statusByline(task) != null) ...[
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Icon(
+                            (status?.isDone ?? false)
+                                ? Icons.check_circle_outline_rounded
+                                : Icons.swap_horiz_rounded,
+                            size: 14,
+                            color: plannerFaint,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              statusByline(task)!,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: plannerMuted,
+                                fontSize: 11.5,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 12),
                     // The discussion gets a card of its own rather than an
                     // icon in the corner: on a shared task the conversation
                     // is half the point, and a hidden entrance reads as
                     // "there is no chat".
-                    _DiscussionCard(task: task, onOpenChat: onOpenChat),
+                    _DiscussionCard(
+                      task: task,
+                      onOpenChat: onOpenChat,
+                      onOpenNotes: onOpenNotes,
+                    ),
+                    const SizedBox(height: 8),
+                    // The work log sits beside the chat, not inside it: one is
+                    // the conversation, the other is what was actually done
+                    // and the files that prove it.
+                    _WorkLogCard(task: task, onOpenNotes: onOpenNotes),
                   ],
                 ),
               ),
@@ -984,6 +1028,7 @@ class _DetailsHeader extends StatelessWidget {
     required this.status,
     required this.tone,
     required this.onOpenChat,
+    required this.onOpenNotes,
   });
 
   final PlannerTask task;
@@ -991,6 +1036,7 @@ class _DetailsHeader extends StatelessWidget {
   final StatusLabel? status;
   final Color tone;
   final ValueChanged<PlannerTask> onOpenChat;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   @override
   Widget build(BuildContext context) {
@@ -1086,11 +1132,122 @@ class _DetailsHeader extends StatelessWidget {
 /// Tinted with the brand blue and given a real button, because "is anyone
 /// talking about this?" is the question a shared task answers here — and the
 /// message count answers it before the card is even clicked.
+/// The work log's entrance, mirroring [_DiscussionCard].
+class _WorkLogCard extends StatelessWidget {
+  const _WorkLogCard({required this.task, required this.onOpenNotes});
+
+  final PlannerTask task;
+  final ValueChanged<PlannerTask> onOpenNotes;
+
+  void _open(BuildContext context) {
+    Navigator.of(context).pop();
+    onOpenNotes(task);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = task.noteCount;
+    final hasNotes = count > 0;
+
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => _open(context),
+        borderRadius: BorderRadius.circular(radiusMd),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(12, 11, 12, 11),
+          decoration: BoxDecoration(
+            color: tint(plannerGreen, hasNotes ? 0.06 : 0.03),
+            borderRadius: BorderRadius.circular(radiusMd),
+            border: Border.all(
+              color: tint(plannerGreen, hasNotes ? 0.28 : 0.16),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 34,
+                height: 34,
+                decoration: BoxDecoration(
+                  color: tint(plannerGreen, 0.12),
+                  borderRadius: BorderRadius.circular(radiusSm),
+                ),
+                alignment: Alignment.center,
+                child: Icon(
+                  hasNotes
+                      ? Icons.fact_check_rounded
+                      : Icons.fact_check_outlined,
+                  size: 16,
+                  color: plannerGreen,
+                ),
+              ),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Work notes',
+                      style: TextStyle(
+                        color: plannerInk,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      hasNotes
+                          ? '$count ${count == 1 ? 'note' : 'notes'} — '
+                                'what was done, and the proof'
+                          : 'No notes yet — record what was done',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: plannerMuted,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: plannerGreen,
+                  borderRadius: BorderRadius.circular(radiusSm),
+                ),
+                child: Text(
+                  hasNotes ? 'Open log' : 'Add note',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _DiscussionCard extends StatelessWidget {
-  const _DiscussionCard({required this.task, required this.onOpenChat});
+  const _DiscussionCard({
+    required this.task,
+    required this.onOpenChat,
+    required this.onOpenNotes,
+  });
 
   final PlannerTask task;
   final ValueChanged<PlannerTask> onOpenChat;
+  final ValueChanged<PlannerTask> onOpenNotes;
 
   void _open(BuildContext context) {
     Navigator.of(context).pop();

@@ -182,6 +182,44 @@ class AuthService {
 
   Future<void> signOut() => _auth.signOut();
 
+  /// Changes the signed-in user's password, after proving they know the
+  /// current one.
+  ///
+  /// Supabase's updateUser does not ask for the old password: a session is
+  /// enough. That is too weak for a desktop app people leave signed in — an
+  /// unattended machine would be one dialog away from a password change that
+  /// locks the owner out. So the current password is verified first, by
+  /// signing in with it, and the update only happens if that succeeds.
+  Future<void> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final email = currentUser?.email;
+    if (email == null) {
+      throw const AuthException('You are not signed in.', statusCode: '401');
+    }
+    if (currentPassword == newPassword) {
+      throw const AuthException(
+        'That is already your password. Choose a different one.',
+        statusCode: '400',
+      );
+    }
+    requireValidPasswordLength(newPassword);
+
+    // Throws on a wrong password, which is the check. It re-issues the session
+    // for the same account, so the user stays signed in either way.
+    try {
+      await _auth.signInWithPassword(email: email, password: currentPassword);
+    } on AuthException {
+      throw const AuthException(
+        'That is not your current password.',
+        statusCode: '400',
+      );
+    }
+
+    await _auth.updateUser(UserAttributes(password: newPassword));
+  }
+
   /// Exchanges a callback URL for a session. Supabase handles both PKCE
   /// (`?code=`) and implicit (`#access_token=`) callbacks here, including
   /// propagating errors returned in the callback.

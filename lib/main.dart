@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -14,6 +15,7 @@ import 'features/auth/login_page.dart';
 import 'features/planner/planner_page.dart';
 import 'shared/utils/planner_colors.dart';
 import 'shared/widgets/update_dialog.dart';
+import 'shared/widgets/whats_new_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -123,13 +125,28 @@ class _AuthGateState extends State<_AuthGate> with WidgetsBindingObserver {
     // Offer any newer GitHub release once the first frame is up, so the
     // dialog has a navigator to attach to. Debug builds skip it: the check
     // would nag developers whose local version trails the published one.
-    if (!kDebugMode && Platform.isWindows) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) {
-          promptForUpdateIfAvailable(context);
-        }
-      });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        unawaited(_greet());
+      }
+    });
+  }
+
+  /// What to show once the first frame is up.
+  ///
+  /// "What's new" comes first and is awaited: it is the record of an update
+  /// that has *already* happened, and stacking it under an offer to install
+  /// the next one would leave two dialogs fighting over the same screen.
+  ///
+  /// The update check is skipped in debug builds — it would nag developers
+  /// whose local version trails the published one — but the notes are not,
+  /// since that is the only way to see them without cutting a release.
+  Future<void> _greet() async {
+    await showWhatsNewIfUpdated(context);
+    if (!mounted || kDebugMode || !Platform.isWindows) {
+      return;
     }
+    await promptForUpdateIfAvailable(context);
   }
 
   /// Honours "stay signed in": when it was unchecked, the session is dropped as
